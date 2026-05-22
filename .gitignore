@@ -1,0 +1,8 @@
+/__pycache__
+.claude
+.venv
+results
+/results_v2
+uv.lock
+pyproject.toml
+./__pycache__
