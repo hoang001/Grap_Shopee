@@ -354,11 +354,110 @@ giảm độ trễ NHẶT mà không bỏ đơn nào.
 chỉnh theo config), kiểm chứng trên seed lạ (1/55/777/2024) để chứng minh không
 overfit, và đều giữ/tăng net.
 
-## 11. Vấn đề còn mở (hướng phát triển)
+## 11. Giai đoạn 7 — Đỗ-dự-đoán theo heatmap cầu (phiên làm việc mới)
 
-- **C5 (%đúng hạn 77) & các map lớn nhất (V15 ring, V18–V20):** phần khó còn lại,
-  bị giới hạn bởi deadline hỏa-tốc quá ngắn so với quãng đường. Vì không được giảm
-  net (cấm bỏ đơn-trễ), chỉ còn dư địa ở giảm-độ-trễ: định tuyến nhiều-đơn có kiểm
-  tra khả thi deadline, hoặc đỗ-dự-đoán theo xu hướng cầu quan sát được.
-- **Kiểm thử N tới 100** (tier F của v2): cần đo thời gian từng-config-một (chạy gộp
-  dễ timeout) để xác nhận trong giới hạn 60 phút.
+Xuất phát: net `test_config` 5491 (6/6 pass 70/70, nhưng chỉ 2/6 đạt 90/90), v3
+(3 seed) 88.3%. Mục tiêu phiên: đẩy %giao & %đúng hạn về 90% và tăng độ bền v3.
+
+### 11a. Chẩn đoán: lateness = ĐỘ TRỄ NHẶT, tập trung ở đơn hỏa-tốc
+Đo per-order (appear→pick→deliver) trên C5/C6/V15/V19/V20: đơn TRỄ có độ-trễ-nhặt
+cao gấp ~1.5–2× trung vị (vd V15: trung vị 24 vs đơn trễ 49). Leg giao gần như là
+quãng đường bắt buộc. %đúng hạn mất chủ yếu ở **p3** (deadline chỉ t+10..60 — quá
+ngắn so với map lớn). Net & %đúng hạn ĐỒNG HƯỚNG cho p3 (giao on-time = ALPHA 3.0
+vs late BETA 0.5 ⇒ gấp 6×) → một cơ chế cắt độ-trễ-nhặt sẽ ↑ cả hai.
+
+### 11b. Trần cấu trúc đã xác định (không phải lỗi thuật toán)
+- **C1 giao 86.7%:** 1 đơn w=40kg trong khi W_max=20 (không chở nổi) + 1 đơn xuất
+  hiện ở t=237/T=240. Trần thực ~13/15 → **không thể đạt 90% giao**.
+- **C4 giao 93.3%:** 3 đơn 40kg (W_max max=30, không chở nổi) + 1 đơn cuối-giờ →
+  93.3% chính là TRẦN. C4 trễ chỉ 1–9 bước ở vài đơn → cắt ~10 bước latency là đạt.
+
+### 11c. Sửa: lọc "đơn chết" ở nhánh reposition (giữ)
+Shipper rỗng KHÔNG đuổi theo điểm lấy của đơn nặng hơn mọi `W_max` (không ai chở
+nổi) — trước đây bị dụ tới đó, phí quãng đường. Chỉ áp ở nhánh reposition; nhánh
+"đỗ tiếp ứng" cuối GIỮ NGUYÊN (lọc nó lại làm tụt C1/C3 — việc đuổi đơn-chết tình
+cờ định vị tốt; nay được thay bằng đỗ-dự-đoán có chủ đích bên dưới).
+
+### 11d. Đỗ-dự-đoán theo HEATMAP CẦU quan sát được (thắng chính)
+**Cơ chế:** tích lũy `_demand[ô lấy] += 1` mỗi đơn xuất hiện, phân rã ×0.98/bước
+(thuần adaptive — KHÔNG đọc surge/hotspot). Shipper rỗng hết đơn-để-đuổi → tiến
+tới ô cầu cao theo điểm `demand/(1+dist)`; **sticky** (lưu `_idle_goal` riêng vì ô
+heatmap không có đơn thật nên `_goal_valid` không giữ được → tránh dao động);
+**coverage-claim** trải nhiều shipper ra nhiều vùng. Gating **C≥3** (đội 1–2 nên
+phản ứng tham lam, đừng bỏ vùng đứng đi đón đầu xa — nếu không C1/C2 sập). Chi phí
+chặn bằng top-K ứng viên cầu (k=max(8,4·C)) tính một lần/bước → an toàn N lớn.
+
+**Kết quả (net-DƯƠNG, kiểm trên held-out):**
+
+| | test_config net | 90/90 | C5 %đúng hạn | v3 70/70 tune | v3 70/70 held-out |
+|--|--|--|--|--|--|
+| Trước (gđ 6) | 5491 | 2/6 | 77.3 | 88.3% | 87.5% |
+| Sau (gđ 7) | **5639** (+2.7%) | **3/6** | **86.7** (+9.4) | 88.3% | **90.0%** |
+
+C4 lên 92.9% đúng hạn (đạt 90/90), C5 86.7 (+9.4), C3/C2/C1 giữ, v3 90/90 36.7→45%.
+**Held-out (seed 1/55/777/2024) = 90.0% ≥ tune 88.3% ⇒ KHÔNG overfit.** Chỉ C6 net
+hụt nhẹ (1575→1516, %đúng hạn giữ 84.6).
+
+### 11e. Trọng-số-ưu-tiên cho heatmap — THỬ rồi LOẠI (overfit seed)
+`_demand += o.p` (vùng đơn gấp hút shipper mạnh hơn): v3 tune 70/70 **93.3%** rất
+hấp dẫn, NHƯNG held-out tụt còn **87.5%** (< count-based 90.0%) và test net giảm
+5639→5570. Phần thắng nằm ở seed tune → **revert** về count-based theo đúng kỷ luật
+"ưu tiên độ bền held-out".
+
+## 12. Giai đoạn 8 — Tối ưu THỜI GIAN cho N lớn (giữ nguyên chất lượng)
+
+Mục tiêu: giảm thời gian chạy khi N tăng (Phase 2 có 4–6 config N≤100), **N=70 phải
+< 6 phút**, và **không được làm tệ kết quả trên test_config / test_config_v3** (đều
+N≤30). Đo từng-config-một (E8 N=40, F1 N=55, F4 N=70 trong `test_config_v2.txt`).
+
+### 12a. Định vị nút cổ chai (cProfile trên E8)
+`_sta_star` (A* không-thời-gian) chiếm ~95% thời gian. Bên trong: `valid_next_pos`/
+`is_valid_cell`/`next_pos` (~56M lần) sinh hàng xóm + `dict.get` (174M) tra heuristic.
+14000 lần gọi A* (=C·T) cho E8. F4 (N=70) **timeout >400s**.
+
+### 12b. Precompute ADJACENCY tĩnh (behavior-preserving)
+Bản đồ tĩnh → tính sẵn `_adj[ô] = (chính-ô, các-ô-kề-đi-được)` một lần
+(`_build_adj`), thay mọi `valid_next_pos(...)` trong `_sta_star`/`_dist_from`/
+`_greedy_path`/`_plan_moves_big`/`_break_deadlocks`. Bỏ hẳn ~56M lần gọi
+next_pos/is_valid_cell. **E8: 43s → 23s (1.9×)**, kết quả Y HỆT.
+
+### 12c. THEN CHỐT: bỏ qua A* khi đích xa hơn horizon (behavior-preserving)
+Quan sát: nếu `h0 = dist(start→goal) > max_t` thì A* KHÔNG THỂ chạm đích trong
+`max_t` bước (chờ chỉ làm dài thêm) → chắc chắn duyệt cạn cả "quả cầu horizon"
+(O(#ô·max_t) trạng thái) rồi mới rơi về `_greedy_path`. Thêm một dòng
+`if h0 > max_t: return self._greedy_path(...)` → trả KẾT QUẢ Y HỆT nhưng bỏ toàn
+bộ khâu duyệt vô ích. Đây đúng là tình huống phổ biến khi N lớn (đích thường ở xa).
+**E8: 23s → 2.6s; F1 (N=55): 5.9s; F4 (N=70): timeout → 9.6–10.6s.**
+
+### 12d. Kiểm chứng KHÔNG đổi chất lượng
+12b+12c chỉ thay cách tính, không đổi đầu ra: `test_config` net **5639** y nguyên,
+6 dòng %giao/%đúng hạn y hệt; v3 tune 70/70 **88.3%**, **held-out 90.0%**, 90/90
+**45%** — tất cả KHÔNG đổi. (Bench v3 còn chạy nhanh hơn: 33.8s → 19.6s.)
+
+### 12e. ĐÃ THỬ rồi LOẠI
+- **Giảm horizon (cap<24):** net SẬP (cap=20 → 4477) vì đích-xa rơi về greedy
+  collision-blind gây deadlock ở C5/C6. Không sạch → giữ cap=40 + mẹo 12c.
+- **A* cắt-ngắn trả frontier gần-đích nhất:** v3 tụt 88.3→85% (bước-kế-tiếp né-va-
+  chạm đôi khi "chờ" trong khi greedy tiến được — throughput quan trọng hơn). Loại.
+- **Đổi sang planner 1-bước `_plan_moves_big` cho N lớn:** **THẢM HỌA** C6 giao
+  91→18% (deadlock ở cổng hẹp) — phụ thuộc cấu trúc map, không an toàn cho Phase 2.
+
+### Trạng thái chốt phiên này
+
+| N (config) | Trước | Sau |
+|--|--|--|
+| 40 (E8) | 43s | **2.6s** (16×) |
+| 55 (F1) | — | **5.9s** |
+| 70 (F4) | **timeout >400s** | **~10s** |
+
+→ N=70 ~10s ≪ 360s; ngoại suy tuyến-tính N=100 ~25–40s. Chất lượng N≤30 KHÔNG đổi.
+
+## 13. Vấn đề còn mở (hướng phát triển)
+
+- **V15 (ring), V19, V20:** vẫn trượt 70/70 ở vài seed (%đúng hạn ~58–67%) — trần
+  cấu trúc do p3 + map rất lớn. Dư địa: định tuyến nhiều-đơn có kiểm tra khả thi
+  deadline (route insertion), hoặc heatmap có hướng (đón đầu theo dòng đơn).
+- **%đúng hạn trên N rất lớn (F1/F4):** với planner hiện tại, đích-xa dùng greedy
+  collision-blind → %đúng hạn thấp (F4 ~25%) dù %giao tốt (~91%) và net dương. Nếu
+  Phase 2 chấm net thì chấp nhận được; muốn ↑%đúng hạn cần planner tầm-trung rẻ mà
+  vẫn né va chạm (vd A* tới waypoint ~horizon bước trên đường ngắn nhất).

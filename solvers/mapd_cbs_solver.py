@@ -4,11 +4,13 @@ mapd_cbs_solver.py — MAPD with Conflict-Based Search (CBS).
 Kiến trúc 2 lớp đúng tinh thần MAPD-CBS:
 
   • Lớp TASK ASSIGNMENT (online): mỗi bước gán đơn chưa-phục-vụ cho shipper rỗi
-    theo reward-density, ưu tiên giao đúng hạn; gom đơn cùng tuyến
+    theo EDF (ưu tiên giao đúng hạn) + reward-density; gom đơn cùng tuyến
     (opportunistic pickup); shipper rỗi reposition về phía cụm đơn unassigned.
-    Đây là cơ chế thích nghi với môi trường động: KHÔNG đọc tham số
-    surge/hotspot, chỉ dùng phân bố đơn QUAN SÁT ĐƯỢC → tự dồn về nơi đơn
-    đang xuất hiện nhiều.
+    Khi không còn đơn để đuổi, shipper rỗi ĐỖ DỰ ĐOÁN theo HEATMAP CẦU quan sát
+    được (số đơn từng xuất hiện ở mỗi ô, phân rã theo thời gian) → tự dồn về
+    vùng cầu nóng để cắt độ trễ nhặt đơn kế tiếp; coverage-claim trải các shipper
+    rảnh ra nhiều vùng thay vì chụm một điểm. Đây là cơ chế thích nghi môi trường
+    động: KHÔNG đọc tham số surge/hotspot, chỉ dùng phân bố đơn QUAN SÁT ĐƯỢC.
 
   • Lớp PATH PLANNING (không va chạm): với số shipper nhỏ dùng Conflict-Based
     Search (space-time A*); với quy mô lớn dùng prioritized greedy-descent có
@@ -52,7 +54,6 @@ from env import (
     Order,
     Shipper,
     r_base,
-    valid_next_pos,
 )
 from solvers.solver import Solver
 
@@ -60,7 +61,6 @@ Position = Tuple[int, int]
 INF = 10**9
 
 DIRS = {"S": (0, 0), "U": (-1, 0), "D": (1, 0), "L": (0, -1), "R": (0, 1)}
-MOVE_LIST = ["U", "D", "L", "R", "S"]
 
 
 def _pos_to_move(src: Position, dst: Position) -> str:
@@ -69,21 +69,6 @@ def _pos_to_move(src: Position, dst: Position) -> str:
         if r == dr and c == dc:
             return m
     return "S"
-
-
-def _bfs_dist_map(grid, start: Position) -> Dict[Position, int]:
-    """Full BFS từ start; trả {pos: distance} cho mọi ô reachable."""
-    dist: Dict[Position, int] = {start: 0}
-    q = deque([start])
-    while q:
-        pos = q.popleft()
-        d1 = dist[pos] + 1
-        for m in MOVE_LIST[:-1]:
-            nxt = valid_next_pos(pos, m, grid)
-            if nxt != pos and nxt not in dist:
-                dist[nxt] = d1
-                q.append(nxt)
-    return dist
 
 
 class MAPDCBSSolver(Solver):
@@ -113,16 +98,69 @@ class MAPDCBSSolver(Solver):
         # theo độ dài tuyến, không phụ thuộc N/C của config cụ thể.
         self._opp_max: int = 2
         self._detour_f: float = 0.25
+        # Tải trọng lớn nhất của đội; đơn nặng hơn là "đơn chết" — không ai chở nổi.
+        self._max_wmax: float = 0.0
+        # HEATMAP CẦU QUAN SÁT ĐƯỢC (adaptive, KHÔNG đọc surge/hotspot): tích lũy
+        # số đơn từng xuất hiện tại mỗi ô lấy hàng, phân rã theo thời gian. Dùng để
+        # ĐỖ DỰ ĐOÁN shipper rảnh về vùng cầu cao → cắt độ trễ nhặt đơn KẾ TIẾP.
+        self._demand: Dict[Position, float] = {}
+        self._demand_decay: float = 0.98
+        self._demand_cands: List[Position] = []
+        # Ô đã được một shipper rảnh khác nhắm tới trong bước này (để TRẢI shipper
+        # ra nhiều vùng cầu thay vì chụm vào một điểm). Reset mỗi bước.
+        self._idle_claims: Set[Position] = set()
+        # Đích đỗ-dự-đoán hiện hành của shipper rảnh (sticky) — ô heatmap không có
+        # đơn thật nên _goal_valid không giữ được; lưu riêng để tránh dao động.
+        self._idle_goal: Dict[int, Position] = {}
+        # Bật đỗ-dự-đoán theo heatmap (đặt ở run() theo số shipper); mặc định tắt.
+        self._allow_anticip: bool = False
+        # Trần horizon của A* không-thời-gian (đủ lớn để né va chạm tầm gần; đích
+        # xa hơn tầm này được xử lý bằng greedy-descent — xem _sta_star).
+        self._horizon_cap: int = 40
+        # ADJACENCY TĨNH precompute: ô -> [chính nó (chờ)] + các ô kề đi-được. Bản
+        # đồ tĩnh nên tính một lần; tránh gọi valid_next_pos/is_valid_cell hàng chục
+        # triệu lần trong A* không-thời-gian (nút cổ chai chính khi N lớn).
+        self._adj: Dict[Position, Tuple[Position, ...]] = {}
         # RNG nội bộ để chọn hướng né (không đọc seed env; chỉ phá đối xứng).
         self._rng = random.Random(12345)
+
+    def _build_adj(self) -> None:
+        grid = self._grid
+        rows, cols = len(grid), len(grid[0])
+        adj: Dict[Position, Tuple[Position, ...]] = {}
+        for r in range(rows):
+            row = grid[r]
+            for c in range(cols):
+                if row[c] != 0:
+                    continue
+                nb = [(r, c)]  # chờ tại chỗ
+                if r > 0 and grid[r - 1][c] == 0:
+                    nb.append((r - 1, c))
+                if r + 1 < rows and grid[r + 1][c] == 0:
+                    nb.append((r + 1, c))
+                if c > 0 and grid[r][c - 1] == 0:
+                    nb.append((r, c - 1))
+                if c + 1 < cols and grid[r][c + 1] == 0:
+                    nb.append((r, c + 1))
+                adj[(r, c)] = tuple(nb)
+        self._adj = adj
 
     # ── distance (chỉ BFS từ ô tĩnh) ────────────────────────────────────────
 
     def _dist_from(self, origin: Position) -> Dict[Position, int]:
         d = self._dist_cache.get(origin)
         if d is None:
-            d = _bfs_dist_map(self._grid, origin)
-            self._dist_cache[origin] = d
+            adj = self._adj
+            dist: Dict[Position, int] = {origin: 0}
+            q = deque([origin])
+            while q:
+                pos = q.popleft()
+                d1 = dist[pos] + 1
+                for nxt in adj[pos]:
+                    if nxt not in dist:
+                        dist[nxt] = d1
+                        q.append(nxt)
+            self._dist_cache[origin] = d = dist
         return d
 
     def _d_to(self, static_cell: Position, frm: Position) -> int:
@@ -280,11 +318,14 @@ class MAPDCBSSolver(Solver):
             return (orders[oid].sx, orders[oid].sy)
 
         # Rỗng hoàn toàn → reposition về cụm đơn unassigned (cơ chế adaptive).
+        # Bỏ qua đơn CHẾT (nặng hơn mọi W_max) — không ai chở nổi, đừng đuổi theo.
         assigned_ids = {v for v in self._assignments.values() if v is not None}
         on_time: List[Tuple[Position, int]] = []
         late: List[Tuple[Position, int]] = []
         for o in orders.values():
             if o.picked or o.delivered or o.id in assigned_ids:
+                continue
+            if o.w > self._max_wmax:
                 continue
             pick = (o.sx, o.sy)
             d_pick = self._d_to(pick, pos)
@@ -296,16 +337,45 @@ class MAPDCBSSolver(Solver):
             if t + d_pick + d_del - o.et >= self._T - 1:
                 continue
             (on_time if t + d_pick + d_del <= o.et else late).append((pick, d_pick))
-        if on_time:
-            return min(on_time, key=lambda x: x[1])[0]
-        if late:
-            return min(late, key=lambda x: x[1])[0]
+        # Còn đơn unassigned khả thi → tiến tới điểm lấy gần nhất (ưu tiên đơn còn
+        # kịp đúng hạn). Claim ô đã nhắm để nhánh đỗ-dự-đoán phía dưới trải người ra.
+        pool = on_time or late
+        if pool:
+            pk = min(pool, key=lambda x: x[1])[0]
+            self._idle_claims.add(pk)
+            return pk
 
-        # Không còn đơn unassigned khả thi (mọi đơn còn chờ đều đã gán cho người
-        # khác) → ĐỖ CHỦ ĐỘNG tiến tới điểm lấy CÒN-CHỜ GẦN NHẤT. Cắt độ trễ phản
-        # ứng với đơn kế tiếp: khi shipper giữ assignment đó được giải phóng/đổi,
-        # ta đã ở sẵn gần cầu. Mục tiêu sticky nên không thrashing. Thuần adaptive:
-        # chỉ dùng phân bố đơn QUAN SÁT ĐƯỢC, không đọc surge/hotspot.
+        # Không còn đơn unassigned khả thi → ĐỖ DỰ ĐOÁN theo HEATMAP CẦU quan sát
+        # được: tiến tới vùng đơn từng xuất hiện nhiều gần đây (điểm số cầu/khoảng
+        # cách), trải đều qua coverage-claim. Thuần adaptive, không đọc surge/hotspot
+        # — đây là cách shipper rảnh tự dồn về nơi cầu đang nóng để bắt đơn kế tiếp.
+        # Đỗ-dự-đoán chỉ bật khi đội đủ đông để VỪA tiếp tục phục vụ VỪA cử người
+        # phủ vùng cầu (≥3 shipper). Với 1–2 shipper, mọi người nên phản ứng tham
+        # lam (đi tới đơn gần nhất) thay vì bỏ vùng đứng để đi đón đầu cầu ở xa.
+        if self._allow_anticip:
+            # Giữ đích đỗ-dự-đoán cũ nếu còn cầu (sticky) → không dao động mỗi bước.
+            prev = self._idle_goal.get(s.id)
+            if (prev is not None and prev != pos and self._demand.get(prev, 0.0) > 1e-3
+                    and self._d_to(prev, pos) < INF):
+                self._idle_claims.add(prev)
+                return prev
+            best_cell: Optional[Position] = None
+            best_key: Tuple[int, float] = (1, -1.0)
+            for cell in self._demand_cands:
+                d = self._d_to(cell, pos)
+                if d >= INF:
+                    continue
+                score = self._demand[cell] / (1.0 + d)
+                key = (cell in self._idle_claims, -score)
+                if key < best_key:
+                    best_key, best_cell = key, cell
+            if best_cell is not None and best_cell != pos:
+                self._idle_claims.add(best_cell)
+                self._idle_goal[s.id] = best_cell
+                return best_cell
+
+        # Không có tín hiệu cầu nào → tiến tới điểm lấy còn-chờ gần nhất (kể cả đã
+        # gán cho người khác) để sẵn sàng tiếp ứng; mục tiêu sticky nên không dao động.
         best_pk: Optional[Position] = None
         best_d = INF
         for o in orders.values():
@@ -337,6 +407,18 @@ class MAPDCBSSolver(Solver):
     def _compute_goals(self, shippers: List[Shipper], orders: Dict[int, Order],
                        t: int) -> Dict[int, Position]:
         goals: Dict[int, Position] = {}
+        self._idle_claims = set()
+        # Ứng viên đỗ-dự-đoán: chỉ giữ TOP ô cầu cao nhất (theo demand) một lần mỗi
+        # bước → chặn chi phí O(#shipper · #ô-cầu) khi N/G lớn (Phase 2). Số ứng
+        # viên tỉ lệ số shipper (đủ để mỗi người có lựa chọn riêng), không theo N.
+        if self._allow_anticip and self._demand:
+            k = max(8, 4 * len(shippers))
+            self._demand_cands = sorted(
+                (c for c, d in self._demand.items() if d > 1e-3),
+                key=lambda c: self._demand[c], reverse=True,
+            )[:k]
+        else:
+            self._demand_cands = []
         for s in shippers:
             g = self._goal.get(s.id)
             if g is not None and self._goal_valid(s, g, orders):
@@ -356,14 +438,24 @@ class MAPDCBSSolver(Solver):
         h0 = hfield.get(start, INF)
         if h0 >= INF:
             return [start]
+        # Đích xa hơn horizon → A* KHÔNG THỂ chạm tới trong max_t bước (chờ chỉ làm
+        # dài thêm), ắt sẽ duyệt cạn cả quả-cầu-horizon rồi rơi về greedy. Bỏ qua
+        # khâu duyệt tốn kém đó, trả greedy NGAY — kết quả y hệt, nhanh hơn nhiều.
+        # Đây là nút cổ chai chính khi N lớn (đích thường ở xa).
+        if h0 > max_t:
+            return self._greedy_path(start, goal, max_t)
         heap: List[Tuple] = [(h0, 0, start, 0)]
         g_map: Dict[Tuple, int] = {(start, 0): 0}
         par: Dict[Tuple, Optional[Tuple]] = {(start, 0): None}
         found = None
+        adj = self._adj
+        hget = hfield.get
+        gget = g_map.get
+        push = heapq.heappush
         while heap:
             _, g, pos, tt = heapq.heappop(heap)
             key = (pos, tt)
-            if g > g_map.get(key, INF):
+            if g > gget(key, INF):
                 continue
             if pos == goal:
                 found = key
@@ -371,19 +463,18 @@ class MAPDCBSSolver(Solver):
             if tt >= max_t:
                 continue
             nt = tt + 1
-            for m in MOVE_LIST:
-                npos = valid_next_pos(pos, m, self._grid)
+            ng = g + 1
+            for npos in adj[pos]:
                 nk = (npos, nt)
                 if nk in vertex_cons:
                     continue
-                h = hfield.get(npos, INF)
+                h = hget(npos, INF)
                 if h >= INF:
                     continue
-                ng = g + 1
-                if ng < g_map.get(nk, INF):
+                if ng < gget(nk, INF):
                     g_map[nk] = ng
                     par[nk] = key
-                    heapq.heappush(heap, (ng + h, ng, npos, nt))
+                    push(heap, (ng + h, ng, npos, nt))
         if found is None:
             return self._greedy_path(start, goal, max_t)
         path, cur = [], found
@@ -402,8 +493,7 @@ class MAPDCBSSolver(Solver):
             if cur == goal:
                 break
             best, bnp = hfield.get(cur, INF), cur
-            for m in MOVE_LIST[:-1]:
-                np = valid_next_pos(cur, m, self._grid)
+            for np in self._adj[cur]:
                 hv = hfield.get(np, INF)
                 if hv < best:
                     best, bnp = hv, np
@@ -510,8 +600,7 @@ class MAPDCBSSolver(Solver):
                 continue
             hfield = self._dist_from(goal)
             cands = []
-            for m in MOVE_LIST:
-                np = valid_next_pos(start, m, self._grid)
+            for np in self._adj[start]:
                 hv = hfield.get(np, INF)
                 if hv < INF:
                     cands.append((hv, np))
@@ -560,10 +649,7 @@ class MAPDCBSSolver(Solver):
                 continue
             pos = cur[s.id]
             cands = []
-            for m in MOVE_LIST[:-1]:
-                np = valid_next_pos(pos, m, self._grid)
-                if np == pos:
-                    continue
+            for np in self._adj[pos][1:]:   # [0] là chính ô (đứng yên) → bỏ
                 # Ô trống: không ai đang đứng và không ai khác định vào.
                 if np in occupied_now or np in planned:
                     continue
@@ -602,6 +688,11 @@ class MAPDCBSSolver(Solver):
         N = obs["N"]
         self._grid = obs["grid"]
         self._T = obs["T"]
+        self._build_adj()
+        self._max_wmax = max((s.W_max for s in obs["shippers"]), default=0.0)
+        # Đỗ-dự-đoán theo heatmap chỉ bật khi đội ≥3: đủ người để vừa phục vụ vừa
+        # phủ vùng cầu. Đội 1–2 phản ứng tham lam hiệu quả hơn.
+        self._allow_anticip = C >= 3
 
         # Planner mặc định: prioritized planning (lớp thấp của CBS + thứ tự ưu
         # tiên, đặt chỗ theo toàn tuyến trong không-thời gian). Đây là lựa chọn
@@ -611,12 +702,22 @@ class MAPDCBSSolver(Solver):
         self._use_cbs = False
         self._cbs_max_nodes = 60 if C <= 4 else 30
         # Horizon đủ để A* tới đích + vài bước chờ né va chạm.
-        horizon = max(8, min(2 * N, 40))
+        horizon = max(8, min(2 * N, self._horizon_cap))
 
         while not obs["done"]:
             orders: Dict[int, Order] = obs["orders"]
             shippers: List[Shipper] = obs["shippers"]
             t: int = obs["t"]
+
+            # Cập nhật heatmap cầu: phân rã rồi cộng các đơn vừa xuất hiện.
+            if self._demand:
+                for k in self._demand:
+                    self._demand[k] *= self._demand_decay
+            for oid in obs.get("new_order_ids", []):
+                o = orders.get(oid)
+                if o is not None:
+                    cell = (o.sx, o.sy)
+                    self._demand[cell] = self._demand.get(cell, 0.0) + 1.0
 
             self._assign_tasks(shippers, orders, t)
             goals = self._compute_goals(shippers, orders, t)
