@@ -321,20 +321,44 @@ VẪN giữ throughput cho map ít shipper (V2). Cả hai tham số không-thứ
 **Kết quả (chốt):** v3 (seed 42/7/123) **86.7%, config-pass 16/20**; kiểm chứng
 seed lạ (1/55/777/2024) **83.8%** — không overfit seed.
 
+### 10e. Admission control đơn-trễ — THỬ rồi LOẠI (vi phạm tiêu chí net)
+**Giả thuyết:** bỏ gán đơn sẽ giao quá trễ (`arrival-et ≥ frac·T`) để giải phóng
+shipper cho đơn savable → ↑%đúng hạn.
+**Đo:** trên v3 đúng là ↑ (frac=0.08: pass 86.7→91.7%, net gần như phẳng). NHƯNG
+trên `test_config` **net GIẢM** (5263→5206) và C6 %đúng hạn còn tụt.
+**Phân tích nguyên lý:** với đơn-trễ, ba chỉ số ĐỐI KHÁNG nhau — giao đơn trễ thì
+*↑net, ↑%giao, ↓%đúng hạn*; bỏ nó thì *↓net, ↓%giao, ↑%đúng hạn*. Không có cách
+nào dùng đòn bẩy đơn-trễ để vừa ↑%giao vừa ↑%đúng hạn mà không đổi net. Vì tiêu chí
+là **không được giảm net**, hướng này bị **loại**. Muốn ↑%đúng hạn mà giữ net thì
+phải GIẢM ĐỘ TRỄ của đơn ta vẫn giao (giao nhanh hơn), không phải bỏ đơn.
+
+### 10f. Đỗ chủ động về điểm lấy gần nhất khi rảnh (giữ — thắng mọi mặt)
+**Thay đổi:** khi shipper rỗng và không còn đơn unassigned khả thi (mọi đơn còn chờ
+đã gán cho người khác), thay vì đứng yên → tiến tới ĐIỂM LẤY CÒN-CHỜ GẦN NHẤT. Cắt
+độ trễ phản ứng với đơn kế tiếp; mục tiêu sticky nên không thrashing; thuần adaptive
+(chỉ dùng phân bố đơn quan sát được). Đây chính là hướng "giao nhanh hơn" ở 10e —
+giảm độ trễ NHẶT mà không bỏ đơn nào.
+**Kết quả (net-DƯƠNG mọi mặt):** test_config net 5263→**5491**, %đúng hạn trung bình
+87→**91%** (C2 83→100, C3→97, C6 80→85); v3 tune 86.7→**88.3%**, held-out
+83.8→**87.5%**, config-pass **16/20 trên CẢ tune lẫn held-out**.
+
 ### Trạng thái chốt phiên này
 
-| | test_config (net) | test_config pass | v3 pass | v3 config-pass |
+| | test_config (net) | test_config pass | v3 tune | v3 held-out (seed lạ) |
 |--|--|--|--|--|
-| Trước phiên | 4935 | 6/6 | 71.7% | 11/20 |
-| Sau phiên | **5263** | **6/6** | **86.7%** | **16/20** |
+| Trước phiên | 4935 | 6/6 | 71.7% | — |
+| Sau phiên | **5491** (+11.3%) | **6/6** | **88.3%** (cfg 16/20) | **87.5%** (cfg 16/20) |
 
-`test_config` %đúng hạn: C1 100, C2 83, C3 95, C4 86, C6 80 (≥80); chỉ C5 78.7 còn
-sát ngưỡng. %giao mọi config ≥86. v3 failures còn lại đều thuần %đúng hạn trên map
-lớn/ring khó nhất (V15, V18–V20).
+`test_config` %đúng hạn: C1 100, C2 100, C3 97, C4 89, C6 85; chỉ C5 77 còn dưới 80.
+%giao mọi config ≥86.7. Toàn bộ thay đổi phiên này là nguyên lý chung (không tinh
+chỉnh theo config), kiểm chứng trên seed lạ (1/55/777/2024) để chứng minh không
+overfit, và đều giữ/tăng net.
 
 ## 11. Vấn đề còn mở (hướng phát triển)
 
-- **%đúng hạn map lớn nhất (V15 ring, V18–V20, N≥25):** vẫn ~55-68%. Đây là phần
-  khó nhất còn lại; cần định tuyến (route) chủ động có kiểm tra khả thi deadline,
-  hoặc positioning dự đoán theo phân bố đơn quan sát được.
-- **Kiểm thử N tới 100** (tier F của v2): đang xác nhận thời gian trong giới hạn.
+- **C5 (%đúng hạn 77) & các map lớn nhất (V15 ring, V18–V20):** phần khó còn lại,
+  bị giới hạn bởi deadline hỏa-tốc quá ngắn so với quãng đường. Vì không được giảm
+  net (cấm bỏ đơn-trễ), chỉ còn dư địa ở giảm-độ-trễ: định tuyến nhiều-đơn có kiểm
+  tra khả thi deadline, hoặc đỗ-dự-đoán theo xu hướng cầu quan sát được.
+- **Kiểm thử N tới 100** (tier F của v2): cần đo thời gian từng-config-một (chạy gộp
+  dễ timeout) để xác nhận trong giới hạn 60 phút.

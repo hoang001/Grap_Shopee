@@ -113,11 +113,6 @@ class MAPDCBSSolver(Solver):
         # theo độ dài tuyến, không phụ thuộc N/C của config cụ thể.
         self._opp_max: int = 2
         self._detour_f: float = 0.25
-        # Ngưỡng admission control (đặt trong run theo tỉ lệ T). T-1 ≈ không bỏ đơn.
-        self._late_budget: int = 10**9
-        self._late_frac: float = 1.0
-        # Chế độ đỗ chủ động khi rảnh: 'centroid' (về tâm cụm cầu) hoặc 'near'.
-        self._idle_mode: str = "centroid"
         # RNG nội bộ để chọn hướng né (không đọc seed env; chỉ phá đối xứng).
         self._rng = random.Random(12345)
 
@@ -212,10 +207,7 @@ class MAPDCBSSolver(Solver):
                 if d_pickup >= INF:
                     continue
                 arrival = t + d_pickup + d_deliver
-                # Admission control: bỏ đơn sẽ giao quá trễ — vừa gần 0 reward, vừa
-                # trói shipper lâu làm lỡ đơn savable sắp tới. Ngưỡng theo tỉ lệ T
-                # (suy từ độ suy giảm reward trễ, không tinh chỉnh theo config).
-                if arrival - o.et >= self._late_budget:
+                if arrival - o.et >= self._T - 1:   # reward ~ 0 → bỏ
                     continue
                 score = (d_pickup, s.id)
                 if arrival <= o.et:
@@ -301,7 +293,7 @@ class MAPDCBSSolver(Solver):
             d_del = self._d_to((o.ex, o.ey), pick)
             if d_del >= INF:
                 continue
-            if t + d_pick + d_del - o.et >= self._late_budget:
+            if t + d_pick + d_del - o.et >= self._T - 1:
                 continue
             (on_time if t + d_pick + d_del <= o.et else late).append((pick, d_pick))
         if on_time:
@@ -309,29 +301,22 @@ class MAPDCBSSolver(Solver):
         if late:
             return min(late, key=lambda x: x[1])[0]
 
-        # Không còn đơn unassigned khả thi → ĐỖ CHỦ ĐỘNG về phía cụm cầu quan sát
-        # được: tiến tới điểm lấy (của đơn bất kỳ còn chờ, kể cả đã gán cho người
-        # khác) GẦN TÂM phân bố các điểm lấy đang chờ nhất. Cắt độ trễ phản ứng với
-        # đơn kế tiếp mà không thrashing (mục tiêu sticky). Thuần adaptive: chỉ dùng
-        # phân bố đơn quan sát được, không đọc surge/hotspot.
-        pending = [(o.sx, o.sy) for o in orders.values() if not o.picked and not o.delivered]
-        if pending:
-            cr = sum(p[0] for p in pending) / len(pending)
-            cc = sum(p[1] for p in pending) / len(pending)
-            best_pk: Optional[Position] = None
-            best_score = INF
-            for pk in pending:
-                d = self._d_to(pk, pos)
-                if d >= INF:
-                    continue
-                if self._idle_mode == "near":
-                    score = d
-                else:
-                    score = abs(pk[0] - cr) + abs(pk[1] - cc)
-                if score < best_score:
-                    best_score, best_pk = score, pk
-            if best_pk is not None and best_pk != pos:
-                return best_pk
+        # Không còn đơn unassigned khả thi (mọi đơn còn chờ đều đã gán cho người
+        # khác) → ĐỖ CHỦ ĐỘNG tiến tới điểm lấy CÒN-CHỜ GẦN NHẤT. Cắt độ trễ phản
+        # ứng với đơn kế tiếp: khi shipper giữ assignment đó được giải phóng/đổi,
+        # ta đã ở sẵn gần cầu. Mục tiêu sticky nên không thrashing. Thuần adaptive:
+        # chỉ dùng phân bố đơn QUAN SÁT ĐƯỢC, không đọc surge/hotspot.
+        best_pk: Optional[Position] = None
+        best_d = INF
+        for o in orders.values():
+            if o.picked or o.delivered:
+                continue
+            pk = (o.sx, o.sy)
+            d = self._d_to(pk, pos)
+            if d < best_d:
+                best_d, best_pk = d, pk
+        if best_pk is not None and best_d < INF and best_pk != pos:
+            return best_pk
         return pos
 
     def _goal_valid(self, s: Shipper, g: Position, orders: Dict[int, Order]) -> bool:
@@ -627,7 +612,6 @@ class MAPDCBSSolver(Solver):
         self._cbs_max_nodes = 60 if C <= 4 else 30
         # Horizon đủ để A* tới đích + vài bước chờ né va chạm.
         horizon = max(8, min(2 * N, 40))
-        self._late_budget = max(1, int(self._late_frac * self._T))
 
         while not obs["done"]:
             orders: Dict[int, Order] = obs["orders"]
