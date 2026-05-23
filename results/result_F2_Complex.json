@@ -1,0 +1,41 @@
+{
+  "config_name": "F2_Complex",
+  "orders_total_fixed": 480,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "GreedyBFS",
+      "config_name": "F2_Complex",
+      "total_orders": 480,
+      "orders_generated": 480,
+      "delivered": 16,
+      "on_time": 5,
+      "late": 11,
+      "missed": 464,
+      "delivery_rate": 3.3333333333333335,
+      "on_time_rate": 31.25,
+      "total_reward": 133.1126,
+      "total_movecost": -61.7544,
+      "net_reward": 71.3583,
+      "elapsed_sec": 47.9746,
+      "shipper_rewards": [
+        -0.6789,
+        -4.6655,
+        30.1677,
+        1.1101,
+        -3.3125,
+        -5.0392,
+        -2.3078,
+        -3.8327,
+        54.5929,
+        11.7936,
+        0.1815,
+        -2.7525,
+        -2.5962,
+        -1.3023
+      ],
+      "status": "OK",
+      "wall_sec": 48.15
+    }
+  ]
+}

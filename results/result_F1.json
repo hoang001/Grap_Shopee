@@ -1,0 +1,49 @@
+{
+  "config_name": "F1",
+  "orders_total_fixed": 430,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "ACOSolver",
+      "config_name": "F1",
+      "total_orders": 430,
+      "orders_generated": 430,
+      "delivered": 333,
+      "on_time": 159,
+      "late": 174,
+      "missed": 97,
+      "delivery_rate": 77.44186046511628,
+      "on_time_rate": 47.747747747747745,
+      "total_reward": 3243.9158,
+      "total_movecost": -303.7013,
+      "net_reward": 2940.2145,
+      "elapsed_sec": 63.9545,
+      "shipper_rewards": [
+        412.6578,
+        120.3686,
+        387.7426,
+        259.0356,
+        288.8505,
+        98.3236,
+        216.9753,
+        319.127,
+        125.0501,
+        205.4506,
+        87.7551,
+        188.8817,
+        229.9959
+      ],
+      "status": "OK",
+      "metrics": {
+        "stuck": 487,
+        "escaped": 487,
+        "edf_full": 3848,
+        "ub_skip": 7478,
+        "opp": 2843,
+        "idle": 389,
+        "pher_deposits": 333
+      },
+      "wall_sec": 64.13
+    }
+  ]
+}
