@@ -1,153 +1,145 @@
 #!/usr/bin/env python3
 """
-generate_phase2.py — Mô phỏng bộ config Phase 2 để stress-test solver.
+generate_phase2.py — Sinh config MÔ PHỎNG Phase 2, RANDOM tham số ẩn theo seed.
 
-Phase 2 (theo problem.md + env.py) công bố ĐẦY ĐỦ 4 knob sinh đơn ẩn ở Phase 1:
-    lambda0, surge_amplitude, surge_windows, hotspots
-và nới biên: N <= 100, C <= 25, G <= 1500, T <= 2400, tối đa 8 config.
+Mục tiêu: mô phỏng GẦN ĐÚNG config Phase 2 mà KHÔNG hardcode bộ tham số ẩn. Mỗi
+"draw" (mỗi seed) cho một bộ surge/hotspot/map khác nhau, bốc trong range neo theo
+chính logic env tự sinh ở Phase 1 (env.py:_resolve_generation_params) rồi nới rộng
+để stress test. Nhờ vậy đánh giá đo độ ROBUST trên một PHÂN PHỐI kịch bản Phase 2,
+không phải một bộ số may rủi.
 
-Bộ này KHÔNG nhằm tối ưu điểm — nó cố tình phủ rộng để đo độ THÍCH NGHI:
-  • N ramp 20 → 100 (kiểm tra scale của BFS-from-static + planner).
-  • Nhiều topology (open / sparse / maze / rooms / divided / bottleneck / grid).
-  • Surge từ nhẹ tới cực đoan (A = 3 → 12), 1–3 cửa sổ, 1–3 hotspot trải vị trí.
-  • Cửa sổ surge đặt sớm / giữa / muộn để thử phản ứng ở các pha khác nhau.
+KHUNG CỐ ĐỊNH (không random): 8 mức quy mô P1..P8 trải tới biên Phase 2
+(N≤100, C≤25, G≤1500, T≤2400) — để các draw cùng quy mô, so sánh được.
 
-LƯU Ý cơ chế env (env.py:_resolve_generation_params): chỉ khi config có ĐỒNG
-THỜI surge_windows VÀ hotspots thì env mới dùng chúng; nếu thiếu một trong hai,
-env tự sinh ngẫu nhiên. Generator này luôn phát cả hai để mô phỏng đúng Phase 2.
-lambda0 mặc định = G/T (đúng như env tự suy ra) nên không cần ghi đè.
+RANDOM mỗi draw (tham số ẩn / chưa biết trước):
+  • map: chọn topology + density + seed ngẫu nhiên (map Phase 2 ta chưa biết).
+  • surge_amplitude A  ~ phần lớn U(2,6), thi thoảng cực đoan U(6,10).
+  • số cửa sổ surge      ~ {1,2,2,3}; mỗi cửa sổ start/duration random.
+  • số hotspot + vị trí  ~ random trên ô trống, số lượng theo C.
+  • λ₀: KHÔNG ghi → env tự lấy G/T (đúng baseline; tổng đơn vẫn = G).
 
-    python3 generate_phase2.py --out test_config_phase2.txt
-    python3 eval_dynamic.py --config test_config_phase2.txt --nmax 100 \
-            --timeout 300 --seeds 42 7 123
+Solver KHÔNG đọc các tham số này (chỉ dùng heatmap quan sát) nên random hóa chỉ
+đổi MÔI TRƯỜNG, không rò rỉ vào thuật toán.
+
+Dùng:
+    python3 generate_phase2.py --out test_config_phase2.txt --seed 0   # 1 draw để xem
+    # Monte Carlo nhiều draw: dùng eval_phase2_mc.py (import build_strings).
 """
 from __future__ import annotations
 
 import argparse
+import random
+from typing import List, Tuple
 
 from generate_configs import (
-    _find_free,
     _fmt_config,
+    _free_cells,
     _k_maxes,
     _w_maxes,
     asymmetric_map,
     bottleneck_map,
     divided_h_map,
+    divided_v_map,
     grid_obstacles_map,
     maze_map,
-    open_map,
     rooms_4_map,
     sparse_map,
     validate_configs,
 )
 
+# Khung quy mô cố định: (name, N, C, G, T). Trải từ vừa tới trần Phase 2.
+SCALE_SLOTS: List[Tuple[str, int, int, int, int]] = [
+    ("P1", 20, 5, 120, 720),
+    ("P2", 30, 7, 220, 960),
+    ("P3", 40, 9, 350, 1200),
+    ("P4", 50, 12, 500, 1440),
+    ("P5", 60, 14, 650, 1600),
+    ("P6", 75, 18, 900, 1900),
+    ("P7", 90, 22, 1200, 2200),
+    ("P8", 100, 25, 1500, 2400),
+]
 
-def _hotspots(grid, coords):
-    """Ánh xạ danh sách (r,c) mong muốn về ô trống gần nhất, loại trùng."""
-    out = []
-    for r, c in coords:
-        cell = _find_free(grid, r, c)
-        if cell not in out:
-            out.append(cell)
-    return out
+
+def _random_map(rng: random.Random, N: int):
+    """Chọn topology + tham số ngẫu nhiên; mọi builder đều đảm bảo liên thông."""
+    ms = rng.randint(0, 10**9)
+    pick = rng.choice([
+        "sparse", "sparse", "sparse",   # phổ biến nhất
+        "maze", "asymmetric",
+        "divided_h", "divided_v", "rooms", "grid", "bottleneck",
+    ])
+    if pick == "sparse":
+        return sparse_map(N, rng.uniform(0.08, 0.18), ms)
+    if pick == "maze":
+        return maze_map(N, rng.uniform(0.15, 0.22), ms)
+    if pick == "asymmetric":
+        return asymmetric_map(N, ms)
+    if pick == "divided_h":
+        return divided_h_map(N, rng.randint(2, 4))
+    if pick == "divided_v":
+        return divided_v_map(N, rng.randint(2, 4))
+    if pick == "rooms":
+        return rooms_4_map(N)
+    if pick == "grid":
+        return grid_obstacles_map(N)
+    return bottleneck_map(N)
 
 
-def build() -> list:
-    """8 config Phase 2 mô phỏng, N tăng dần tới 100."""
-    cfgs = []
+def _random_surge(rng: random.Random, T: int) -> Tuple[float, List[Tuple[int, int]]]:
+    """Bốc surge_amplitude + các cửa sổ. Range neo env.py rồi nới rộng."""
+    # 75% biên độ vừa, 25% cực đoan.
+    amp = rng.uniform(2.0, 6.0) if rng.random() < 0.75 else rng.uniform(6.0, 10.0)
+    n_win = rng.choice([1, 2, 2, 3])
+    lo = int(0.10 * T)
+    windows: List[Tuple[int, int]] = []
+    for _ in range(n_win):
+        dur = rng.randint(max(20, T // 8), max(21, T // 4))
+        hi = max(lo + 1, int(0.85 * T) - dur)
+        s = rng.randint(lo, hi)
+        windows.append((s, min(T - 1, s + dur)))
+    return round(amp, 1), sorted(windows)
 
-    # P1 — N=20, surge nhẹ giữa episode, 1 hotspot trung tâm. Baseline scale.
-    g = sparse_map(20, 0.10, 901)
-    cfgs.append(_fmt_config(
-        "P1", N=20, C=5, G=120, T=720,
-        k_maxes=_k_maxes(5), w_maxes=_w_maxes(5), grid=g,
-        surge_amplitude=3.0, surge_windows=[(200, 320)],
-        hotspots=_hotspots(g, [(10, 10)]),
-    ))
 
-    # P2 — N=30, 2 cửa sổ surge (sớm + muộn), 2 hotspot đối góc → cầu nhảy vùng.
-    g = sparse_map(30, 0.10, 902)
-    cfgs.append(_fmt_config(
-        "P2", N=30, C=7, G=220, T=960,
-        k_maxes=_k_maxes(7), w_maxes=_w_maxes(7), grid=g,
-        surge_amplitude=4.0, surge_windows=[(120, 260), (640, 800)],
-        hotspots=_hotspots(g, [(6, 6), (24, 24)]),
-    ))
+def _random_hotspots(rng: random.Random, grid, C: int) -> List[Tuple[int, int]]:
+    """Số hotspot theo C (neo env: ~C/2, chặn 4), vị trí random trên ô trống."""
+    free = _free_cells(grid)
+    n = rng.randint(1, min(4, max(1, C // 3)))
+    return rng.sample(free, min(n, len(free)))
 
-    # P3 — N=40, map chia đôi (cổng hẹp) + surge mạnh dồn về 1 nửa → nút cổ chai.
-    g = divided_h_map(40, n_gaps=3)
-    cfgs.append(_fmt_config(
-        "P3", N=40, C=9, G=350, T=1200,
-        k_maxes=_k_maxes(9), w_maxes=_w_maxes(9), grid=g,
-        surge_amplitude=6.0, surge_windows=[(300, 520)],
-        hotspots=_hotspots(g, [(8, 20), (8, 8)]),
-    ))
 
-    # P4 — N=50, maze (nhiều vật cản) → stress heuristic A* + dist-cache.
-    g = maze_map(50, 0.20, 904)
-    cfgs.append(_fmt_config(
-        "P4", N=50, C=12, G=500, T=1440,
-        k_maxes=_k_maxes(12), w_maxes=_w_maxes(12), grid=g,
-        surge_amplitude=5.0, surge_windows=[(400, 640)],
-        hotspots=_hotspots(g, [(12, 12), (38, 38), (12, 38)]),
-    ))
-
-    # P5 — N=60, 4 phòng nối qua tâm + surge cực đoan ở tâm (điểm tranh chấp nhất).
-    g = rooms_4_map(60)
-    cfgs.append(_fmt_config(
-        "P5", N=60, C=14, G=650, T=1600,
-        k_maxes=_k_maxes(14), w_maxes=_w_maxes(14), grid=g,
-        surge_amplitude=8.0, surge_windows=[(500, 760)],
-        hotspots=_hotspots(g, [(30, 30)]),
-    ))
-
-    # P6 — N=75, bottleneck 1-ô + 2 surge → kiểm tra chống deadlock hành lang.
-    g = bottleneck_map(75)
-    cfgs.append(_fmt_config(
-        "P6", N=75, C=18, G=900, T=1900,
-        k_maxes=_k_maxes(18), w_maxes=_w_maxes(18), grid=g,
-        surge_amplitude=6.0, surge_windows=[(350, 560), (1100, 1350)],
-        hotspots=_hotspots(g, [(20, 37), (55, 37)]),
-    ))
-
-    # P7 — N=90, grid vật cản đều + 3 hotspot trải, surge dài → cầu phân tán động.
-    g = grid_obstacles_map(90)
-    cfgs.append(_fmt_config(
-        "P7", N=90, C=22, G=1200, T=2200,
-        k_maxes=_k_maxes(22), w_maxes=_w_maxes(22), grid=g,
-        surge_amplitude=5.0, surge_windows=[(600, 1000), (1500, 1800)],
-        hotspots=_hotspots(g, [(15, 15), (45, 75), (75, 30)]),
-    ))
-
-    # P8 — N=100, C=25, G=1500, T=2400: TRẦN Phase 2. Map bất đối xứng + surge
-    # cực đoan muộn → kiểm tra scale tối đa và phản ứng surge cuối episode.
-    g = asymmetric_map(100, 905)
-    cfgs.append(_fmt_config(
-        "P8", N=100, C=25, G=1500, T=2400,
-        k_maxes=_k_maxes(25), w_maxes=_w_maxes(25), grid=g,
-        surge_amplitude=10.0, surge_windows=[(900, 1300), (1900, 2300)],
-        hotspots=_hotspots(g, [(20, 20), (80, 80), (20, 80), (80, 20)]),
-    ))
-
+def build_strings(seed: int) -> List[str]:
+    """Sinh 8 config (chuỗi) cho MỘT draw, tham số ẩn random theo seed."""
+    rng = random.Random(seed)
+    cfgs: List[str] = []
+    for name, N, C, G, T in SCALE_SLOTS:
+        grid = _random_map(rng, N)
+        amp, windows = _random_surge(rng, T)
+        hotspots = _random_hotspots(rng, grid, C)
+        cfgs.append(_fmt_config(
+            name, N=N, C=C, G=G, T=T,
+            k_maxes=_k_maxes(C), w_maxes=_w_maxes(C), grid=grid,
+            surge_amplitude=amp, surge_windows=windows, hotspots=hotspots,
+        ))
     return cfgs
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="test_config_phase2.txt")
+    ap.add_argument("--seed", type=int, default=0, help="Seed draw tham số ẩn")
     ap.add_argument("--no-validate", action="store_true")
     args = ap.parse_args()
 
-    cfgs = build()
+    cfgs = build_strings(args.seed)
     header = (
-        "# test_config_phase2.txt — MÔ PHỎNG Phase 2 (KHÔNG phải config chính thức).\n"
-        "# N<=100, C<=25, G<=1500, T<=2400, 8 configs. surge/hotspot công bố đầy đủ.\n"
-        "# Dùng để đo adaptivity của solver, không để tinh chỉnh tham số.\n"
+        f"# test_config_phase2.txt — MÔ PHỎNG Phase 2, draw seed={args.seed}.\n"
+        "# Tham số ẩn (surge/hotspot/map) RANDOM theo seed, KHÔNG hardcode.\n"
+        "# Chạy Monte Carlo nhiều draw bằng eval_phase2_mc.py để đo robust.\n"
         "[SEED]\nbase_seed = 42\n\n"
     )
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(header + "\n".join(cfgs))
-    print(f"Đã ghi {len(cfgs)} configs ra {args.out}")
+    print(f"Đã ghi {len(cfgs)} configs (draw seed={args.seed}) ra {args.out}")
     if not args.no_validate:
         validate_configs(cfgs)
 
