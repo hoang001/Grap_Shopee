@@ -1,0 +1,50 @@
+{
+  "config_name": "P12_Fractal_Grid_Extreme",
+  "orders_total_fixed": 800,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "GreedyBFS",
+      "config_name": "P12_Fractal_Grid_Extreme",
+      "total_orders": 800,
+      "orders_generated": 800,
+      "delivered": 234,
+      "on_time": 77,
+      "late": 157,
+      "missed": 566,
+      "delivery_rate": 29.25,
+      "on_time_rate": 32.9059829059829,
+      "total_reward": 1922.5813,
+      "total_movecost": -242.1467,
+      "net_reward": 1680.4346,
+      "elapsed_sec": 59.6107,
+      "shipper_rewards": [
+        217.7301,
+        182.8568,
+        131.4419,
+        57.4265,
+        93.0323,
+        58.4028,
+        137.7707,
+        27.7469,
+        195.7634,
+        101.4428,
+        51.301,
+        179.5893,
+        93.2796,
+        152.6504
+      ],
+      "status": "OK",
+      "metrics": {
+        "stuck": 1849,
+        "escaped": 1846,
+        "edf_full": 8695,
+        "ub_skip": 87208,
+        "opp": 1644,
+        "idle": 8132,
+        "zone_rep": 884
+      },
+      "wall_sec": 59.83
+    }
+  ]
+}

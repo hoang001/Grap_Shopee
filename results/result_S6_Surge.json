@@ -1,0 +1,40 @@
+{
+  "config_name": "S6_Surge",
+  "orders_total_fixed": 120,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "GreedyBFS",
+      "config_name": "S6_Surge",
+      "total_orders": 120,
+      "orders_generated": 120,
+      "delivered": 66,
+      "on_time": 56,
+      "late": 10,
+      "missed": 54,
+      "delivery_rate": 55.0,
+      "on_time_rate": 84.84848484848484,
+      "total_reward": 1429.3979,
+      "total_movecost": -23.4519,
+      "net_reward": 1405.946,
+      "elapsed_sec": 2.6927,
+      "shipper_rewards": [
+        325.3228,
+        294.8987,
+        300.9411,
+        305.882,
+        178.9014
+      ],
+      "status": "OK",
+      "metrics": {
+        "stuck": 117,
+        "escaped": 116,
+        "edf_full": 8921,
+        "ub_skip": 9052,
+        "opp": 0,
+        "idle": 192
+      },
+      "wall_sec": 2.7
+    }
+  ]
+}

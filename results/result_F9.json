@@ -1,0 +1,57 @@
+{
+  "config_name": "F9",
+  "orders_total_fixed": 830,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "GreedyBFS",
+      "config_name": "F9",
+      "total_orders": 830,
+      "orders_generated": 830,
+      "delivered": 697,
+      "on_time": 224,
+      "late": 473,
+      "missed": 133,
+      "delivery_rate": 83.97590361445783,
+      "on_time_rate": 32.137733142037305,
+      "total_reward": 4732.1257,
+      "total_movecost": -851.0215,
+      "net_reward": 3881.1042,
+      "elapsed_sec": 24.2903,
+      "shipper_rewards": [
+        196.9667,
+        219.3739,
+        330.9662,
+        379.4764,
+        192.9769,
+        173.5286,
+        105.7304,
+        283.272,
+        258.0445,
+        38.0347,
+        78.577,
+        188.3788,
+        243.086,
+        303.1564,
+        103.2286,
+        77.9484,
+        143.6985,
+        209.1547,
+        237.5063,
+        53.5495,
+        64.4497
+      ],
+      "status": "OK",
+      "metrics": {
+        "stuck": 485,
+        "escaped": 485,
+        "edf_full": 2676,
+        "ub_skip": 50628,
+        "opp": 6470,
+        "idle": 1257,
+        "zone_rep": 8208
+      },
+      "wall_sec": 26.07
+    }
+  ]
+}

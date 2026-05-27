@@ -1,0 +1,41 @@
+{
+  "config_name": "S1_Chokepoint",
+  "orders_total_fixed": 90,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "GreedyBFS",
+      "config_name": "S1_Chokepoint",
+      "total_orders": 90,
+      "orders_generated": 90,
+      "delivered": 58,
+      "on_time": 41,
+      "late": 17,
+      "missed": 32,
+      "delivery_rate": 64.44444444444444,
+      "on_time_rate": 70.6896551724138,
+      "total_reward": 809.3937,
+      "total_movecost": -22.1353,
+      "net_reward": 787.2583,
+      "elapsed_sec": 1.2567,
+      "shipper_rewards": [
+        213.6969,
+        136.617,
+        221.745,
+        47.0795,
+        118.24,
+        49.8801
+      ],
+      "status": "OK",
+      "metrics": {
+        "stuck": 291,
+        "escaped": 290,
+        "edf_full": 2961,
+        "ub_skip": 5462,
+        "opp": 0,
+        "idle": 371
+      },
+      "wall_sec": 1.26
+    }
+  ]
+}
