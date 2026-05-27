@@ -1,0 +1,61 @@
+{
+  "config_name": "P6",
+  "orders_total_fixed": 1500,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "GreedyBFS",
+      "config_name": "P6",
+      "total_orders": 1500,
+      "orders_generated": 1500,
+      "delivered": 318,
+      "on_time": 43,
+      "late": 275,
+      "missed": 1182,
+      "delivery_rate": 21.2,
+      "on_time_rate": 13.522012578616351,
+      "total_reward": 1281.6709,
+      "total_movecost": -662.8368,
+      "net_reward": 618.8341,
+      "elapsed_sec": 200.3893,
+      "shipper_rewards": [
+        41.7625,
+        21.9644,
+        49.5801,
+        14.1379,
+        68.9787,
+        57.4024,
+        -3.4238,
+        -10.0812,
+        3.5276,
+        75.9144,
+        12.8407,
+        39.4596,
+        9.2434,
+        22.7981,
+        1.3951,
+        28.2839,
+        42.3666,
+        20.6664,
+        30.9394,
+        55.3118,
+        1.8353,
+        16.5069,
+        13.5943,
+        4.3106,
+        -0.4807
+      ],
+      "status": "OK",
+      "metrics": {
+        "stuck": 5829,
+        "escaped": 5805,
+        "edf_full": 23134,
+        "ub_skip": 29829,
+        "opp": 10032,
+        "idle": 5777,
+        "zone_rep": 3157
+      },
+      "wall_sec": 201.56
+    }
+  ]
+}

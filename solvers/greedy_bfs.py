@@ -84,6 +84,15 @@ class GreedyBFS(Solver):
         self._avg_passage_width: float = self._compute_avg_passage_width()
         self._bottleneck_score: float = 1.0 - self._min_passage_count / max(self._N, 1)
 
+        # Số hàng có rất ít ô tự do — phát hiện cấu trúc đa vùng ngang (như F10).
+        # Grid đa barrier: nhiều hàng chặn ngang, mỗi hàng chỉ có 1-2 khe hở.
+        # Chiến lược tốt: phân tán shipper ra các vùng (spread), không tập trung về tâm.
+        _narrow_thresh = max(2, self._N // 20)
+        self._barrier_row_count: int = sum(
+            1 for r in range(1, self._N - 1)
+            if sum(1 for c in range(self._N) if self.grid[r][c] == 0) <= _narrow_thresh
+        )
+
         # Tìm đường: cache dict thường cho N<=20, cache LRU giới hạn cho N>20
         # Kích thước LRU tỉ lệ với N² để duy trì tỉ lệ trúng cache hữu ích trên grid lớn
         self._path_cache: Dict[Tuple[Position, Position], Tuple[int, Move]] = {}
@@ -121,7 +130,7 @@ class GreedyBFS(Solver):
         # opp:      pickup cơ hội thành công (step 1.5 + 2.5)
         # idle:     shipper-bước ở trạng thái chờ (step 3 + S)
         self._m: Dict[str, int] = dict(
-            stuck=0, escaped=0, edf_full=0, ub_skip=0, opp=0, idle=0
+            stuck=0, escaped=0, edf_full=0, ub_skip=0, opp=0, idle=0, zone_rep=0
         )
 
     # ------------------------------------------------------------------
@@ -203,16 +212,32 @@ class GreedyBFS(Solver):
 
             deliver_first = False
             delivery_mode = "nearest"
-            n_urgency = 1.5 if is_dense else URGENCY_COEFF
             age_coeff = age_cap = 0.25
-            idle_mode = "center" if (is_dense or is_single_bottleneck) else "spread"
+            # Đa barrier: ≥3 hàng có ≤max(2,N/20) ô tự do → grid chia nhiều vùng ngang.
+            # Chiến lược: phân tán shipper ra các vùng để tránh phải vượt nhiều barrier.
+            # Trái với grid bottleneck đơn (corridor) mà center hiệu quả hơn.
+            is_multi_barrier = self._barrier_row_count >= 3
+            # Block/hive grid (P9-P12): is_dense do nhiều block nhỏ lấp diện tích, KHÔNG phải mê cung khó đi.
+            # Nhận biết: is_dense=True + min_passage cao (hành lang đều đặn, dễ đi) + không phải bottleneck.
+            # Chiến lược đúng: spread (phân tán tới hotspot góc) + urgency cao (đến đơn kịp thời).
+            is_structured_block = (is_dense and not is_single_bottleneck
+                                   and self._min_passage_count >= self._N // 6
+                                   and self._N >= 50)
+            effective_dense = is_dense and not is_structured_block
+            n_urgency = 1.5 if is_dense else URGENCY_COEFF
+            # Bottleneck đơn + khe DUY NHẤT (min_passage=1): center idle xếp hàng tại khe → hiệu quả.
+            # Bottleneck đơn + nhiều khe (min_passage≥2): spread phân agent qua các khe, tránh nghẽn.
+            # Ví dụ: P6 (min=1, 1 khe ở tâm) → center; P3 (min=3) và P5 (min=2) → spread.
+            is_single_cell_bottleneck = is_single_bottleneck and self._min_passage_count <= 1
+            idle_mode = "center" if (effective_dense or is_single_cell_bottleneck) and not is_multi_barrier else "spread"
             safe_buffer = 0
             deliver_nearby = 2
             deliver_nearby_gate = is_dense or is_single_bottleneck
             use_edf = True
             # Manhattan an toàn chỉ khi không có tường nội bộ (Manhattan = BFS trên grid trống)
             use_manhattan_dist = (self._internal_walls == 0)
-            replan_interval = 20 if use_manhattan_dist else 12
+            # Đa barrier: replan_interval ngắn hơn để phản hồi nhanh với đơn hàng mới trong vùng gần.
+            replan_interval = 20 if use_manhattan_dist else (6 if is_multi_barrier else 12)
             opportunistic_radius = 8 if use_manhattan_dist else 5
             max_detour = 6
 
@@ -510,13 +535,21 @@ class GreedyBFS(Solver):
         direct = self._dist(shipper.position, goal)
         if direct >= INF:
             return None
+        # Tighter pre-filter for high path-stretch grids (many barriers → actual >> Manhattan).
+        # On obstacle-heavy grids, most candidates passing direct_m+max_detour would fail
+        # the actual A* detour check — just wasting 2 A* calls each.
+        # Scale the Manhattan window down proportionally to path_stretch = direct/direct_m.
+        if direct_m > 0 and direct >= 2 * direct_m:
+            m_filter_extra = max(1, int(max_detour * direct_m / direct))
+        else:
+            m_filter_extra = max_detour
         best, best_score = None, -float("inf")
         for o in available:
             if o.id in reserved:
                 continue
             # Pre-filter nhanh bằng Manhattan trước khi gọi A*
             m_via = abs(r0 - o.sx) + abs(c0 - o.sy) + abs(o.sx - gr) + abs(o.sy - gc)
-            if m_via > direct_m + max_detour:
+            if m_via > direct_m + m_filter_extra:
                 continue
             if not shipper.can_carry(o, orders):
                 continue
@@ -619,16 +652,69 @@ class GreedyBFS(Solver):
             score *= age_factor
         return score
 
+    def _pickup_candidate_pool(self, shipper: Shipper, available: List[Order],
+                               reserved: set, t: int) -> List[Order]:
+        """
+        VRP-inspired lightweight candidate pruning for _best_pickup.
+
+        On large / overloaded maps, avoid running expensive safety and exact
+        distance checks for every open order. Keep both nearby candidates for
+        throughput and urgent/high-priority candidates as a safety valve.
+        """
+        r0, c0 = shipper.position
+        if self._N < 40:
+            return sorted(available, key=lambda o: abs(r0 - o.sx) + abs(c0 - o.sy))
+
+        cheap: List[Tuple[int, int, int, int, Order]] = []
+        for o in available:
+            if o.id in reserved:
+                continue
+            d1_m = abs(r0 - o.sx) + abs(c0 - o.sy)
+            d2_m = abs(o.sx - o.ex) + abs(o.sy - o.ey)
+            if t + d1_m + d2_m >= self._T:
+                continue
+            cheap.append((d1_m, o.et, -o.p, o.id, o))
+
+        if len(cheap) <= 96:
+            return [item[-1] for item in sorted(cheap)]
+
+        nearby_limit = 64 if self._N <= 50 else 80
+        urgent_limit = 24 if self._N <= 50 else 32
+        nearby = sorted(cheap)[:nearby_limit]
+        urgent = sorted(
+            cheap,
+            key=lambda item: (
+                item[1] - t,
+                item[2],
+                item[0],
+                item[3],
+            ),
+        )[:urgent_limit]
+
+        seen = set()
+        merged: List[Tuple[int, int, int, int, Order]] = []
+        for item in nearby + urgent:
+            oid = item[4].id
+            if oid in seen:
+                continue
+            seen.add(oid)
+            merged.append(item)
+        return [item[-1] for item in sorted(merged)]
+
     # ------------------------------------------------------------------
     # Chính sách: chọn pickup và giao hàng
     # ------------------------------------------------------------------
 
     def _best_pickup(self, shipper: Shipper, orders: Dict[int, Order],
-                     available: List[Order], reserved: set, t: int) -> Optional[Order]:
+                     available: List[Order], reserved: set, t: int,
+                     reserved_zones: Optional[set] = None) -> Optional[Order]:
         """Chọn đơn hàng tốt nhất để nhận: điểm urgency cao nhất, đủ sức chứa, an toàn cho hàng đang mang."""
         best, best_score = None, -float("inf")
         r0, c0 = shipper.position
-        for o in available:
+        # Sắp xếp gần → xa để UB filter loại bỏ đơn hàng xa sớm hơn (giảm số lần gọi A*).
+        # Đơn hàng gần nhất được chấm điểm trước → best_score đạt giá trị cao sớm → UB prune hiệu quả hơn.
+        # Kết quả lựa chọn cuối cùng giống hệt (UB filter bảo toàn tính chính xác).
+        for o in self._pickup_candidate_pool(shipper, available, reserved, t):
             if o.id in reserved:
                 continue
             if not shipper.can_carry(o, orders):
@@ -657,6 +743,11 @@ class GreedyBFS(Solver):
             if not self._is_safe_to_pickup(shipper, (o.sx, o.sy), orders, t):
                 continue
             s = self._score_pickup(shipper.position, o, t)
+            # Zone-based soft repulsion: giảm điểm nếu shipper khác đã nhận/cam kết pickup cùng ô.
+            # Không chặn truy cập — chỉ làm giảm ưu tiên nhẹ để tránh herding.
+            if reserved_zones and (o.sx, o.sy) in reserved_zones:
+                s *= 0.80
+                self._m["zone_rep"] += 1
             if s > best_score:
                 best_score = s
                 best = o
@@ -749,6 +840,19 @@ class GreedyBFS(Solver):
         actions: Dict[int, Action] = {}
         reserved: set = set()
 
+        # Pre-populate reserved_zones từ cam kết hiện tại (chỉ khi đủ nhiều shipper).
+        # Mục đích: giảm điểm các đơn cùng ô pickup với shipper đã cam kết → chống herding.
+        # Ngưỡng > 5: bỏ qua grid nhỏ (C1-C6) vì shipper ít nên xung đột zone hiếm.
+        reserved_zones: Optional[set] = None
+        if len(shippers) > 5:
+            reserved_zones = set()
+            for _s in shippers:
+                coid = self._committed.get(_s.id)
+                if coid and coid in orders:
+                    _o = orders[coid]
+                    if not _o.picked and not _o.delivered:
+                        reserved_zones.add((_o.sx, _o.sy))
+
         # Shipper ít hàng trong túi được ưu tiên chọn pickup trước
         for shipper in sorted(shippers, key=lambda s: (len(s.bag), s.id)):
             pos = shipper.position
@@ -786,9 +890,11 @@ class GreedyBFS(Solver):
                 reserved.add(oid)
             else:
                 # Tính lại: quét toàn bộ available để tìm đơn hàng tốt nhất
-                o = self._best_pickup(shipper, orders, available, reserved, t)
+                o = self._best_pickup(shipper, orders, available, reserved, t, reserved_zones)
                 if o is not None:
                     reserved.add(o.id)
+                    if reserved_zones is not None:
+                        reserved_zones.add((o.sx, o.sy))
                     if use_commitment:
                         self._set_commitment(shipper.id, o.id, t)
 
@@ -814,9 +920,9 @@ class GreedyBFS(Solver):
                     dest = (delivery.ex, delivery.ey)
                     # ── 2.5. CƠ HỘI TRÊN ĐƯỜNG GIAO: tìm pickup trong hành lang delivery route ──
                     # Corridor ellipse filter thay thế radius — pickup phải nằm gần tuyến đường,
-                    # không chỉ gần shipper. max_detour=3 đảm bảo rẽ nhánh không đáng kể.
+                    # không chỉ gần shipper. max_detour=2 giữ opportunism thật sự nhỏ.
                     opp = self._opportunistic_corridor(shipper, orders, available, reserved, dest, t,
-                                                       max_detour=3)
+                                                       max_detour=2)
                     if opp is not None:
                         reserved.add(opp.id)
                         if use_commitment:

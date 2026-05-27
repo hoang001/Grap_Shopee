@@ -1,0 +1,44 @@
+{
+  "config_name": "P9_Gridlock_2x2",
+  "orders_total_fixed": 450,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "GreedyBFS",
+      "config_name": "P9_Gridlock_2x2",
+      "total_orders": 450,
+      "orders_generated": 450,
+      "delivered": 178,
+      "on_time": 66,
+      "late": 112,
+      "missed": 272,
+      "delivery_rate": 39.55555555555556,
+      "on_time_rate": 37.07865168539326,
+      "total_reward": 1463.7059,
+      "total_movecost": -125.2824,
+      "net_reward": 1338.4234,
+      "elapsed_sec": 10.5169,
+      "shipper_rewards": [
+        80.1402,
+        271.4843,
+        170.1706,
+        210.7654,
+        238.8452,
+        49.9727,
+        219.2502,
+        97.7948
+      ],
+      "status": "OK",
+      "metrics": {
+        "stuck": 1017,
+        "escaped": 1014,
+        "edf_full": 917,
+        "ub_skip": 27238,
+        "opp": 2241,
+        "idle": 694,
+        "zone_rep": 417
+      },
+      "wall_sec": 10.54
+    }
+  ]
+}
