@@ -1,24 +1,4 @@
-"""
-aco_solver.py — ACO-Inspired Online Dispatch Solver
-====================================================
 
-Architecture:
-    Greedy Online Dispatch  (GreedyBFS backbone — identical logic)
-  + Local Reinforcement Memory  (sparse pheromone per pickup cell)
-  + Pheromone-biased Pickup Selection  (soft multiplier on base score)
-
-Pheromone system (Stage 1-4):
-  Stage 1 — Pheromone-guided pickup selection (soft bias, max +35% score)
-  Stage 2 — Evaporation (periodic) + deposit on successful delivery
-  Stage 3 — Congestion-aware penalty (reduce pheromone at stuck cells)
-  Stage 4 — Neighbourhood smoothing (share deposit to adjacent free cells)
-
-Key invariants:
-  - Pheromone never flips the sign of a score (multiplicative, always >= 1)
-  - Urgency / distance remain dominant; pheromone is a tiebreaker / soft bias
-  - Sparse Dict[Position, float] — O(1) lookup, scales to N=100
-  - All per-timestep work is O(active_orders) or O(pheromone_cells)
-"""
 from __future__ import annotations
 
 import heapq
@@ -39,37 +19,27 @@ Action = Tuple[Move, object]
 INF = 10**9
 MOVES: Tuple[Move, ...] = ("U", "D", "L", "R")
 
-# ── GreedyBFS backbone constants (identical to greedy_bfs.py) ──────────────
+
 URGENCY_COEFF = 2.9
 AGE_COEFF = 3.0
 SAFE_BUFFER = 1
 
-# ── ACO pheromone parameters ────────────────────────────────────────────────
-_PHER_ALPHA      = 0.35   # max pheromone boost: score *= (1 + alpha*tanh()) <= score*1.35
-_PHER_SCALE      = 4.0    # normalization: tanh(pheromone / scale) near 1 when pheromone >= scale
-_PHER_MAX        = 20.0   # per-cell cap — prevents runaway accumulation
-_PHER_EVAP_RATE  = 0.04   # fraction evaporated per decay event
-_PHER_EVAP_INT   = 8      # timesteps between evaporation events
-_PHER_PRUNE      = 0.05   # prune cells below this after evaporation
-_PHER_CONGESTION = 0.70   # multiply pheromone by this factor when shipper stuck at cell
-_PHER_SMOOTH_W   = 0.15   # Stage 4: share this fraction to each free neighbour on deposit
+
+_PHER_ALPHA      = 0.35
+_PHER_SCALE      = 4.0
+_PHER_MAX        = 20.0
+_PHER_EVAP_RATE  = 0.04
+_PHER_EVAP_INT   = 8
+_PHER_PRUNE      = 0.05
+_PHER_CONGESTION = 0.70
+_PHER_SMOOTH_W   = 0.15
 
 
 class ACOSolver(Solver):
-    """
-    Practical ACO-Inspired Online Dispatch Solver.
 
-    Extends the GreedyBFS dispatch pipeline with a lightweight pheromone layer
-    that reinforces productive pickup areas.  The rest of the dispatch logic
-    (pathfinding, topology, commitment, opportunistic pickup, deadlock recovery)
-    is identical to GreedyBFS to ensure a stable baseline.
-    """
 
     method_name = "ACOSolver"
 
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
 
     def __init__(self, env: DeliveryEnv):
         super().__init__(env)
@@ -96,7 +66,7 @@ class ACOSolver(Solver):
         self._avg_passage_width: float = self._compute_avg_passage_width()
         self._bottleneck_score: float = 1.0 - self._min_passage_count / max(self._N, 1)
 
-        # Pathfinding cache — BFS for N<=20, A*+LRU for N>20
+
         self._path_cache: Dict[Tuple[Position, Position], Tuple[int, Move]] = {}
         if self._N > 20:
             self._lru: Optional[OrderedDict] = OrderedDict()
@@ -108,33 +78,30 @@ class ACOSolver(Solver):
         self._strat = self._derive_strategy()
         self._safe_buffer: int = self._strat["safe_buffer"]
 
-        # Commitment (multi-step planning for N>20)
+
         self._committed: Dict[int, Optional[int]] = {}
         self._committed_since: Dict[int, int] = {}
 
-        # Deadlock / congestion memory (GreedyBFS-identical)
+
         self._prev_positions: Dict[int, Position] = {}
         self._congestion: Dict[Position, int] = {}
         self._congestion_t: int = 0
         self._congestion_decay_interval: int = 20
 
-        # ── ACO pheromone state ──────────────────────────────────────
+
         self._pheromone: Dict[Position, float] = {}
         self._last_decay_t: int = 0
-        # All orders ever seen (needed after delivery to find pickup pos)
+
         self._known_orders: Dict[int, Order] = {}
-        # Active order IDs from previous obs (detect deliveries by diff)
+
         self._prev_active_oids: Set[int] = set()
-        # ────────────────────────────────────────────────────────────
+
 
         self._m: Dict[str, int] = dict(
             stuck=0, escaped=0, edf_full=0, ub_skip=0, opp=0, idle=0,
             pher_deposits=0,
         )
 
-    # ------------------------------------------------------------------
-    # Topology helpers  (identical to GreedyBFS)
-    # ------------------------------------------------------------------
 
     def _derive_strategy(self) -> dict:
         N, R = self._N, self._free_ratio
@@ -187,21 +154,21 @@ class ACOSolver(Solver):
             opportunistic_radius = 8 if use_manhattan_dist else 5
             max_detour = 6
         return {
-            "deliver_first":        deliver_first,
-            "delivery_mode":        delivery_mode,
-            "d_blend":              0.05,
-            "n_urgency":            n_urgency,
-            "age_coeff":            age_coeff,
-            "age_cap":              age_cap,
-            "idle_mode":            idle_mode,
-            "safe_buffer":          safe_buffer,
-            "deliver_nearby":       deliver_nearby,
-            "deliver_nearby_gate":  deliver_nearby_gate,
-            "use_edf":              use_edf,
-            "use_manhattan_dist":   use_manhattan_dist,
-            "replan_interval":      replan_interval,
+            "deliver_first": deliver_first,
+            "delivery_mode": delivery_mode,
+            "deadline_margin": 0.05,
+            "urgency_coeff": n_urgency,
+            "age_coeff": age_coeff,
+            "age_cap": age_cap,
+            "idle_mode": idle_mode,
+            "safe_buffer": safe_buffer,
+            "deliver_nearby": deliver_nearby,
+            "deliver_nearby_gate": deliver_nearby_gate,
+            "use_edf": use_edf,
+            "use_manhattan_dist": use_manhattan_dist,
+            "replan_interval": replan_interval,
             "opportunistic_radius": opportunistic_radius,
-            "max_detour":           max_detour,
+            "max_detour": max_detour,
         }
 
     def _find_grid_center(self) -> Optional[Position]:
@@ -266,9 +233,6 @@ class ACOSolver(Solver):
                 widths.append(w)
         return sum(widths) / max(len(widths), 1)
 
-    # ------------------------------------------------------------------
-    # Pathfinding  (identical to GreedyBFS)
-    # ------------------------------------------------------------------
 
     def _bfs_compute(self, start: Position, goal: Position) -> Tuple[int, Move]:
         if not is_valid_cell(start, self.grid) or not is_valid_cell(goal, self.grid):
@@ -359,9 +323,6 @@ class ACOSolver(Solver):
         move = self._bfs(here, goal)[1]
         return move, valid_next_pos(here, move, self.grid)
 
-    # ------------------------------------------------------------------
-    # Commitment  (identical to GreedyBFS)
-    # ------------------------------------------------------------------
 
     def _commitment_valid(self, shipper: Shipper, orders: Dict[int, Order],
                           reserved: set, t: int) -> bool:
@@ -380,9 +341,6 @@ class ACOSolver(Solver):
         self._committed[sid] = oid
         self._committed_since[sid] = t
 
-    # ------------------------------------------------------------------
-    # Opportunistic pickup  (identical to GreedyBFS)
-    # ------------------------------------------------------------------
 
     def _opportunistic_nearby(self, shipper: Shipper, orders: Dict[int, Order],
                                available: List[Order], reserved: set,
@@ -457,9 +415,6 @@ class ACOSolver(Solver):
                 best = o
         return best
 
-    # ------------------------------------------------------------------
-    # Safety check  (identical to GreedyBFS)
-    # ------------------------------------------------------------------
 
     def _is_safe_to_pickup(self, shipper: Shipper, pickup_pos: Position,
                             orders: Dict[int, Order], t: int) -> bool:
@@ -504,22 +459,13 @@ class ACOSolver(Solver):
                     return True
             return False
 
-    # ------------------------------------------------------------------
-    # ACO pheromone primitives
-    # ------------------------------------------------------------------
 
     def _pher_get(self, pos: Position) -> float:
-        """Return pheromone at pos (0.0 if absent)."""
+
         return self._pheromone.get(pos, 0.0)
 
     def _pher_deposit(self, pos: Position, amount: float) -> None:
-        """
-        Stage 2+4: Deposit pheromone at pos and share a fraction to free neighbours.
 
-        Primary deposit is capped at _PHER_MAX.
-        Neighbour share is smaller (SMOOTH_W fraction) — diffuses signal to nearby
-        cells so the map generalises beyond exact pickup coordinates.
-        """
         if amount <= 0:
             return
         cur = self._pheromone.get(pos, 0.0)
@@ -534,7 +480,7 @@ class ACOSolver(Solver):
                     self._pheromone[nb] = min(nb_cur + share, _PHER_MAX)
 
     def _pher_penalize(self, pos: Position) -> None:
-        """Stage 3: Reduce pheromone at a repeatedly congested cell."""
+
         if pos in self._pheromone:
             val = self._pheromone[pos] * _PHER_CONGESTION
             if val < _PHER_PRUNE:
@@ -543,7 +489,7 @@ class ACOSolver(Solver):
                 self._pheromone[pos] = val
 
     def _pher_decay(self, t: int) -> None:
-        """Stage 2: Periodic evaporation — multiply all values by (1 - evap_rate)."""
+
         if t - self._last_decay_t < _PHER_EVAP_INT:
             return
         self._last_decay_t = t
@@ -555,28 +501,20 @@ class ACOSolver(Solver):
         }
 
     def _pher_update(self, obs: dict) -> None:
-        """
-        Called once per timestep before action decisions.
 
-        1. Evaporate pheromone if interval reached (Stage 2).
-        2. Register newly visible orders in _known_orders.
-        3. Detect delivered orders: disappeared from active set and not in any bag.
-           Deposit pheromone at their pickup positions (Stage 1+2).
-        4. Update _prev_active_oids for the next call.
-        """
         t: int = obs["t"]
         orders: Dict[int, Order] = obs["orders"]
         current_oids: Set[int] = set(orders.keys())
 
-        # 1. Evaporate
+
         self._pher_decay(t)
 
-        # 2. Register new orders (store original pickup/delivery coords)
+
         for oid, o in orders.items():
             if oid not in self._known_orders:
                 self._known_orders[oid] = o
 
-        # 3. Detect deliveries: was active last step, not active now, not in any bag
+
         carried_oids: Set[int] = set()
         for s in obs["shippers"]:
             carried_oids.update(s.bag)
@@ -586,29 +524,17 @@ class ACOSolver(Solver):
             orig = self._known_orders.get(oid)
             if orig is None:
                 continue
-            # Deposit proportional to priority-weighted base reward, normalised by episode length
+
             amount = ALPHA[orig.p] * r_base(orig.w) / max(self._T / 100.0, 1.0)
             self._pher_deposit((orig.sx, orig.sy), amount)
             self._m["pher_deposits"] += 1
 
-        # 4. Update prev set
+
         self._prev_active_oids = current_oids
 
-    # ------------------------------------------------------------------
-    # Scoring  (ACO extension applied after base greedy score)
-    # ------------------------------------------------------------------
 
     def _score_pickup(self, pos: Position, order: Order, t: int) -> float:
-        """
-        ACO-biased pickup score.
 
-        base  = (estimated_reward / total_steps) x urgency_factor x age_factor
-        final = base x (1 + ALPHA x tanh(pheromone / SCALE))
-
-        The pheromone multiplier is in [1.0, 1+ALPHA] = [1.0, 1.35].
-        Urgency and distance stay dominant; pheromone only shifts the ranking
-        among candidates that are otherwise comparably scored.
-        """
         d1 = self._dist(pos, (order.sx, order.sy))
         d2 = self._dist((order.sx, order.sy), (order.ex, order.ey))
         if d1 >= INF or d2 >= INF:
@@ -633,22 +559,19 @@ class ACOSolver(Solver):
             )
             score *= age_factor
 
-        # ACO Stage 1: pheromone soft bias
+
         pher = self._pher_get((order.sx, order.sy))
         if pher > 0.0:
             score *= 1.0 + _PHER_ALPHA * math.tanh(pher / _PHER_SCALE)
 
         return score
 
-    # ------------------------------------------------------------------
-    # Dispatch policies  (identical to GreedyBFS; UB filter adjusted for ACO)
-    # ------------------------------------------------------------------
 
     def _best_pickup(self, shipper: Shipper, orders: Dict[int, Order],
                      available: List[Order], reserved: set, t: int) -> Optional[Order]:
         best, best_score = None, -float("inf")
         r0, c0 = shipper.position
-        # UB must account for the max pheromone multiplier so we never skip a valid best.
+
         ub_pher_factor = 1.0 + _PHER_ALPHA
         for o in available:
             if o.id in reserved:
@@ -727,18 +650,15 @@ class ACOSolver(Solver):
         if mode == "spread":
             idx = shipper.id % len(self._spread_positions) if self._spread_positions else 0
             return self._spread_positions[idx] if self._spread_positions else self._grid_center
-        return None  # "stay"
+        return None
 
-    # ------------------------------------------------------------------
-    # Main dispatch  (GreedyBFS pipeline + pheromone updates)
-    # ------------------------------------------------------------------
 
     def _decide_actions(self, obs: dict) -> Dict[int, Action]:
         t: int = obs["t"]
         orders: Dict[int, Order] = obs["orders"]
         shippers: List[Shipper] = obs["shippers"]
 
-        # ACO: update pheromone (decay + deposit on detected deliveries)
+
         self._pher_update(obs)
 
         all_positions: set = {s.position for s in shippers}
@@ -750,7 +670,7 @@ class ACOSolver(Solver):
         for shipper in sorted(shippers, key=lambda s: (len(s.bag), s.id)):
             pos = shipper.position
 
-            # 0. Deliver first (small grids)
+
             if self._strat["deliver_first"] and shipper.bag:
                 delivery = self._best_delivery_target(shipper, orders, t)
                 if delivery is not None:
@@ -759,7 +679,7 @@ class ACOSolver(Solver):
                     actions[shipper.id] = (move, 2 if nxt == dest else 0)
                     continue
 
-            # 0.5. Deliver if nearby
+
             gate = self._strat["deliver_nearby_gate"]
             if shipper.bag and (not gate or len(shipper.bag) >= shipper.K_max):
                 delivery = self._best_delivery_target(shipper, orders, t)
@@ -770,7 +690,7 @@ class ACOSolver(Solver):
                         actions[shipper.id] = (move, 2 if nxt == dest else 0)
                         continue
 
-            # 1. Pickup with commitment
+
             use_commitment = self._strat["replan_interval"] > 1
             if use_commitment and self._commitment_valid(shipper, orders, reserved, t):
                 oid = self._committed[shipper.id]
@@ -785,7 +705,7 @@ class ACOSolver(Solver):
 
             if o is not None:
                 goal = (o.sx, o.sy)
-                # 1.5. Opportunistic nearby pickup
+
                 opp = self._opportunistic_nearby(shipper, orders, available, reserved, goal, t)
                 if opp is not None:
                     reserved.add(opp.id)
@@ -797,12 +717,12 @@ class ACOSolver(Solver):
                 actions[shipper.id] = (move, 1 if nxt == goal else 0)
                 continue
 
-            # 2. Deliver
+
             if shipper.bag:
                 delivery = self._best_delivery_target(shipper, orders, t)
                 if delivery is not None:
                     dest = (delivery.ex, delivery.ey)
-                    # 2.5. Opportunistic corridor pickup en route
+
                     opp = self._opportunistic_corridor(
                         shipper, orders, available, reserved, dest, t, max_detour=3
                     )
@@ -819,7 +739,7 @@ class ACOSolver(Solver):
                     actions[shipper.id] = (move, 2 if nxt == dest else 0)
                     continue
 
-            # 3. Idle
+
             self._m["idle"] += 1
             idle = self._idle_target(shipper, orders)
             if idle is not None and idle != pos:
@@ -828,7 +748,7 @@ class ACOSolver(Solver):
                 continue
             actions[shipper.id] = ("S", 0)
 
-        # ── Deadlock recovery + congestion memory (GreedyBFS-identical) ──
+
         if t - self._congestion_t >= self._congestion_decay_interval and self._congestion:
             self._congestion = {p: v >> 1 for p, v in self._congestion.items() if v > 1}
             self._congestion_t = t
@@ -846,7 +766,7 @@ class ACOSolver(Solver):
             if desired_nxt != shipper.position and desired_nxt not in all_positions:
                 continue
 
-            # Confirmed stuck: record in congestion memory and penalise pheromone (Stage 3)
+
             self._congestion[shipper.position] = min(
                 self._congestion.get(shipper.position, 0) + 1, 16
             )
@@ -871,9 +791,6 @@ class ACOSolver(Solver):
 
         return actions
 
-    # ------------------------------------------------------------------
-    # Main loop
-    # ------------------------------------------------------------------
 
     def run(self) -> dict:
         start_time = time.time()
