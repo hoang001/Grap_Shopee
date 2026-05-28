@@ -156,8 +156,8 @@ class ACOSolver(Solver):
         return {
             "deliver_first": deliver_first,
             "delivery_mode": delivery_mode,
-            "deadline_margin": 0.05,
-            "urgency_coeff": n_urgency,
+            "d_blend": 0.05,
+            "n_urgency": n_urgency,
             "age_coeff": age_coeff,
             "age_cap": age_cap,
             "idle_mode": idle_mode,
