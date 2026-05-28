@@ -1,0 +1,42 @@
+{
+  "config_name": "S5_LargeBottleneck",
+  "orders_total_fixed": 200,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "GreedyBFS",
+      "config_name": "S5_LargeBottleneck",
+      "total_orders": 200,
+      "orders_generated": 200,
+      "delivered": 153,
+      "on_time": 86,
+      "late": 67,
+      "missed": 47,
+      "delivery_rate": 76.5,
+      "on_time_rate": 56.209150326797385,
+      "total_reward": 1663.8321,
+      "total_movecost": -100.492,
+      "net_reward": 1563.3402,
+      "elapsed_sec": 4.739,
+      "shipper_rewards": [
+        297.4669,
+        98.7039,
+        339.6495,
+        276.6598,
+        185.5588,
+        220.8065,
+        144.4949
+      ],
+      "status": "OK",
+      "metrics": {
+        "stuck": 418,
+        "escaped": 417,
+        "edf_full": 1234,
+        "ub_skip": 904,
+        "opp": 2287,
+        "idle": 784
+      },
+      "wall_sec": 4.75
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "config_name": "P5",
+  "orders_total_fixed": 800,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "GreedyBFS",
+      "config_name": "P5",
+      "total_orders": 800,
+      "orders_generated": 800,
+      "delivered": 212,
+      "on_time": 71,
+      "late": 141,
+      "missed": 588,
+      "delivery_rate": 26.5,
+      "on_time_rate": 33.490566037735846,
+      "total_reward": 1545.0566,
+      "total_movecost": -249.9862,
+      "net_reward": 1295.0704,
+      "elapsed_sec": 43.8494,
+      "shipper_rewards": [
+        190.944,
+        73.7329,
+        142.4288,
+        51.726,
+        66.3125,
+        128.5267,
+        88.5887,
+        41.8248,
+        146.3393,
+        83.5208,
+        85.4324,
+        21.7144,
+        59.1666,
+        114.8124
+      ],
+      "status": "OK",
+      "metrics": {
+        "stuck": 1922,
+        "escaped": 1912,
+        "edf_full": 3718,
+        "ub_skip": 19658,
+        "opp": 4256,
+        "idle": 8396,
+        "zone_rep": 661
+      },
+      "wall_sec": 44.05
+    }
+  ]
+}

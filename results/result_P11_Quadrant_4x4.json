@@ -1,0 +1,48 @@
+{
+  "config_name": "P11_Quadrant_4x4",
+  "orders_total_fixed": 650,
+  "online_generation": true,
+  "results": [
+    {
+      "method": "GreedyBFS",
+      "config_name": "P11_Quadrant_4x4",
+      "total_orders": 650,
+      "orders_generated": 650,
+      "delivered": 155,
+      "on_time": 57,
+      "late": 98,
+      "missed": 495,
+      "delivery_rate": 23.846153846153847,
+      "on_time_rate": 36.774193548387096,
+      "total_reward": 1460.6431,
+      "total_movecost": -187.8347,
+      "net_reward": 1272.8084,
+      "elapsed_sec": 21.8549,
+      "shipper_rewards": [
+        103.3499,
+        179.7226,
+        118.9493,
+        244.8665,
+        50.6161,
+        132.6201,
+        177.4294,
+        61.0673,
+        13.5382,
+        85.2244,
+        71.2086,
+        34.216
+      ],
+      "status": "OK",
+      "metrics": {
+        "stuck": 4206,
+        "escaped": 3381,
+        "edf_full": 3285,
+        "ub_skip": 203092,
+        "opp": 5688,
+        "idle": 3236,
+        "zone_rep": 13449
+      },
+      "wall_sec": 21.95
+    }
+  ]
+}
