@@ -17,6 +17,8 @@ import sys
 import time
 from typing import Any
 
+from env import DeliveryEnv, SEED, load_config
+
 MAX_TOTAL_SECONDS = 3600
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,8 +27,6 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 if BASE_SOLVER_DIR not in sys.path:
     sys.path.insert(0, BASE_SOLVER_DIR)
-
-from env import DeliveryEnv, load_config
 
 SOLVER_SOURCES = [
     ("GreedyBFS", "greedy_bfs.py"),
@@ -39,15 +39,15 @@ SOLVER_SOURCES = [
 def load_solver_class(class_name: str, file_name: str):
     path = os.path.join(BASE_SOLVER_DIR, file_name)
     if not os.path.exists(path):
-        sys.exit(f"[ERROR] Khong tim thay {file_name} trong thu muc solvers.")
+        sys.exit(f"[ERROR] Không tìm thấy {file_name} trong thư mục solvers.")
     spec = importlib.util.spec_from_file_location(class_name, path)
     if spec is None or spec.loader is None:
-        sys.exit(f"[ERROR] Khong the load module {file_name}.")
+        sys.exit(f"[ERROR] Không thể load module {file_name}.")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     solver_cls = getattr(mod, class_name, None)
     if solver_cls is None:
-        sys.exit(f"[ERROR] Khong tim thay lop {class_name} trong {file_name}.")
+        sys.exit(f"[ERROR] Không tìm thấy lớp {class_name} trong {file_name}.")
     return solver_cls
 
 
@@ -83,12 +83,14 @@ def _error_result(method: str, cfg: dict, error: str) -> dict:
 
 
 def _stable_config_seed(config_name: str, base_seed: int) -> int:
-    """Tao seed rieng cho tung config, on dinh va khong phu thuoc thu tu chay solver."""
+    """Tạo seed riêng cho từng config, ổn định và không phụ thuộc thứ tự chạy solver."""
     digest = hashlib.md5(f"{base_seed}:{config_name}".encode("utf-8")).hexdigest()
     return int(digest[:8], 16)
 
 
 def _run_solver(solver_cls: Any, cfg: dict, seed: int) -> dict:
+    # Mỗi solver nhận một bản sao cfg và một env mới.
+    # Nhờ vậy state/active_orders/orders_generated của solver trước không thể leak sang solver sau.
     env_cfg = copy.deepcopy(cfg)
     env = DeliveryEnv(env_cfg, seed=seed)
     solver = solver_cls(env)
@@ -97,32 +99,34 @@ def _run_solver(solver_cls: Any, cfg: dict, seed: int) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Online MAPD graph/RL grader")
-    parser.add_argument("--config", required=True, help="Duong dan file test_config.txt")
-    parser.add_argument("--out", default="results", help="Thu muc luu ket qua")
-    parser.add_argument("--method", default="all", help="Phuong phap chay: 'all' de chay tat ca, hoac ten phuong phap cu the (GreedyBFS, VRPOrToolsSolver, ACOSolver, MAPDCBSSolver)")
+    parser.add_argument("--config", required=True, help="Đường dẫn file test_config.txt")
+    parser.add_argument("--out", default="results", help="Thư mục lưu kết quả")
+    parser.add_argument("--method", default="all", help="Phương pháp chạy: 'all' để chạy tất cả, hoặc tên phương pháp cụ thể (GreedyBFS, VRPOrToolsSolver, ACOSolver, MAPDCBSSolver)")
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
 
-    print("Loading solver modules ...")
+    print("Đang load solver modules ...")
     all_solver_classes = load_solver_classes()
-    print("Load OK.")
-
+    print("Load thành công.")
+    
+    # Chọn phương pháp
     if args.method == "all":
         solver_classes = all_solver_classes
-        print("Run all:", ", ".join(name for name, _ in solver_classes))
+        print("Chạy tất cả phương pháp:", ", ".join(name for name, _ in solver_classes))
     else:
+        # Tìm phương pháp cụ thể
         solver_classes = [(name, cls) for name, cls in all_solver_classes if name == args.method]
         if not solver_classes:
             available = [name for name, _ in all_solver_classes]
-            sys.exit(f"[ERROR] Method '{args.method}' not found. Available: {', '.join(available)}")
-        print(f"Run method: {args.method}")
+            sys.exit(f"[ERROR] Phương pháp '{args.method}' không tồn tại. Các phương pháp có sẵn: {', '.join(available)}")
+        print(f"Chạy phương pháp: {args.method}")
+    
+    print("Solver sẽ chạy:", ", ".join(name for name, _ in solver_classes), "\n")
 
-    print("Solvers:", ", ".join(name for name, _ in solver_classes), "\n")
-
-    print(f"Config: {args.config}")
+    print(f"Đọc config: {args.config}")
     configs = load_config(args.config)
-    print(f"Found {len(configs)} configs.\n")
+    print(f"Tìm thấy {len(configs)} config.\n")
 
     all_results = []
     results_by_config = []
@@ -132,10 +136,11 @@ def main():
         name = cfg.get("name", "unknown")
         remaining = MAX_TOTAL_SECONDS - (time.time() - total_start)
         if remaining <= 0:
-            print(f"[TIMEOUT] Exceeded {MAX_TOTAL_SECONDS // 60} min. Stopping.")
+            print(f"[TIMEOUT] Đã vượt quá {MAX_TOTAL_SECONDS // 60} phút. Dừng lại.")
             break
 
-        print(f"[{name}] N={cfg['N']} C={cfg['C']} G={cfg['G']} T={cfg['T']}  ({remaining / 60:.1f} min left)")
+        print(f"[{name}] N={cfg['N']} C={cfg['C']} G={cfg['G']} T={cfg['T']}  (còn {remaining / 60:.1f} phút)")
+        print("  Chế độ online: chỉ G được biết trước; từng đơn được sinh/reveal trong step t.")
         config_seed = _stable_config_seed(str(name), cfg['base_seed'])
 
         cfg_results = []
@@ -165,8 +170,8 @@ def main():
 
             print(f"  [{result['method']}] Net reward: {result['net_reward']:.2f}")
             print(
-                f"    Del/Total: {result['delivered']}/{result['total_orders']}  "
-                f"on_time={result['on_time']}  late={result['late']}  missed={result['missed']}  "
+                f"    Giao/Tổng: {result['delivered']}/{result['total_orders']}  "
+                f"đúng hạn={result['on_time']}  trễ={result['late']}  bỏ lỡ={result['missed']}  "
                 f"generated={result.get('orders_generated', 0)}  t={wall:.2f}s"
             )
 
@@ -192,7 +197,7 @@ def main():
     }
 
     print("=" * 100)
-    print(f"{'Config':<10} {'Method':<28} {'Net Reward':>12} {'%Del':>8} {'%OnTime':>10} {'t(s)':>7}")
+    print(f"{'Config':<10} {'Method':<28} {'Net Reward':>12} {'%Giao':>8} {'%Đúng hạn':>10} {'t(s)':>7}")
     print("-" * 100)
     for r in all_results:
         print(
@@ -200,10 +205,10 @@ def main():
             f"{r['delivery_rate']:>7.1f}% {r['on_time_rate']:>9.1f}% {r.get('wall_sec', 0):>7.1f}"
         )
     print("=" * 100)
-    print("TOTAL SCORE BY METHOD:")
+    print("TỔNG ĐIỂM THEO PHƯƠNG PHÁP:")
     for method, score in total_score_by_method.items():
         print(f"- {method}: {score:.2f}")
-    print(f"Total time: {total_elapsed:.1f}s / {MAX_TOTAL_SECONDS}s")
+    print(f"Tổng thời gian chạy: {total_elapsed:.1f}s / {MAX_TOTAL_SECONDS}s")
 
     summary = {
         "config_file": args.config,
@@ -222,8 +227,8 @@ def main():
     with open(all_results_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-    print(f"\nSaved summary to {summary_path}")
-    print(f"Saved all results to {all_results_path}")
+    print(f"\nĐã lưu tổng kết vào {summary_path}")
+    print(f"Đã lưu toàn bộ kết quả vào {all_results_path}")
 
 
 if __name__ == "__main__":
